@@ -4,6 +4,10 @@ A desktop application for generating, optimizing, and animating origami crease p
 
 ![Example output](result.jpg)
 
+> **Credits:** `box_head.png` is reconstructed from **"Box Head – 16×16 Grid"** by
+> **Boice** (Origami by Boice), designed for the East Bay Origami Convention 2024.
+> [Source](https://www.obb.design/crease-patterns/box-head---16x16-grid)
+
 ---
 
 ## Table of Contents
@@ -202,16 +206,6 @@ cp_generator/
     ├── crease_pattern_methods.tex  # LaTeX source (Beamer presentation)
     └── crease_pattern_methods.pdf  # compiled presentation
 ```
-
----
-
-## Credits
-
-`box_head.png` and the crease-pattern data in `box_head_sample.py` are
-reconstructed from **"Box Head – 16×16 Grid"** by **Boice** (Origami by Boice),
-designed for the East Bay Origami Convention 2024.
-
-Source: <https://www.obb.design/crease-patterns/box-head---16x16-grid>
 
 ---
 
