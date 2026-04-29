@@ -1,0 +1,35 @@
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Generated CP output
+cp.png
+cp.svg
+
+# Personal session state
+fold_session.cpfold.json
+
+# AI / editor config
+.claude/
+.codex
+SKILL.md
+
+# PyInstaller artefacts
+dist/
+build/
+*.spec
+portable-dist/
+
+# LaTeX build artefacts
+report/*.aux
+report/*.fdb_latexmk
+report/*.fls
+report/*.log
+report/*.nav
+report/*.out
+report/*.snm
+report/*.toc
+report/*.xdv
+report/*.synctex.gz

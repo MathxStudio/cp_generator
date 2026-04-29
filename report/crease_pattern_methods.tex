@@ -1,0 +1,241 @@
+\documentclass[aspectratio=169,10pt]{beamer}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+
+\usetheme{metropolis}
+\usefonttheme{professionalfonts}
+\setbeamertemplate{navigation symbols}{}
+
+% ── Palette ────────────────────────────────────────────────────────────────
+\definecolor{cpnavy}{HTML}{1A3047}   % deep navy — frametitle, headings
+\definecolor{cpgold}{HTML}{C9943A}   % warm gold — accents, alerts
+\definecolor{cpstone}{HTML}{F5F3EF}  % warm off-white — body bg
+\definecolor{cpfog}{HTML}{EAE6DF}    % light warm gray — block backgrounds
+\definecolor{cpmid}{HTML}{5C6B7A}    % medium slate — secondary text
+
+\setbeamercolor{normal text}{fg=cpnavy,bg=cpstone}
+\setbeamercolor{frametitle}{bg=cpnavy,fg=white}
+\setbeamercolor{title separator}{fg=cpgold}
+\setbeamercolor{progress bar}{fg=cpgold,bg=cpnavy!30}
+\setbeamercolor{alerted text}{fg=cpgold}
+\setbeamercolor{block title}{bg=cpnavy,fg=white}
+\setbeamercolor{block body}{bg=cpfog,fg=cpnavy}
+\setbeamercolor{block title alerted}{bg=cpgold,fg=white}
+\setbeamercolor{block body alerted}{bg=cpfog,fg=cpnavy}
+\setbeamercolor{itemize item}{fg=cpgold}
+\setbeamercolor{enumerate item}{fg=cpgold}
+\setbeamercolor{itemize subitem}{fg=cpmid}
+
+\setbeamerfont{block title}{size=\small,series=\bfseries}
+\setbeamerfont{frametitle}{size=\large,series=\bfseries}
+
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+
+\title{\textbf{CP Generator}}
+\subtitle{Algorithmic Methods for Origami Crease Patterns}
+\author{Allan Pan}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{What this project is}
+\begin{columns}[T,onlytextwidth]
+\column{0.52\textwidth}
+A desktop app that generates, optimizes, and animates a flat-foldable crease
+pattern on a square sheet — entirely from scratch.
+\medskip
+
+\textcolor{cpmid}{\small \texttt{cp.py} · \texttt{cp\_gen.py} · \texttt{fold\_sim.py}}
+\medskip
+
+\begin{block}{Four linked algorithms}
+\begin{enumerate}\small
+  \item Build a planar candidate graph.
+  \item Repair parity \& optimize for Kawasaki.
+  \item Assign mountains/valleys.
+  \item Extract faces \& animate the fold.
+\end{enumerate}
+\end{block}
+
+\column{0.44\textwidth}
+\textbf{Key objects}
+\begin{itemize}\small
+  \item Sheet \([0,s]^2\); graph \(G=(V,E)\), positions \(X_v\in\RR^2\).
+  \item Crease label \(\operatorname{type}(e)\in\{-1,0,1\}\):
+        unassigned / mountain / valley.
+  \item \alert{Sector angle}: angle between consecutive creases at a vertex.
+  \item \alert{Half-edge}: oriented edge — determines which face lies to its left.
+\end{itemize}
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm I — Planar candidate graph}
+\textbf{Goal.} A planar graph dense enough for interesting folds, regular
+enough for stable local angle computation.
+\medskip
+
+\begin{columns}[T,onlytextwidth]
+\column{0.54\textwidth}
+\begin{block}{Construction}
+\begin{enumerate}\small
+  \item Sample interior points; add four corners.
+  \item Snap near-boundary points to the boundary.
+  \item Compute the Delaunay triangulation.
+  \item Use its edges as the initial crease graph.
+\end{enumerate}
+\end{block}
+
+\column{0.42\textwidth}
+\textbf{Why Delaunay?}\\[3pt]
+\small No other input point lies inside the circumcircle of any triangle —
+avoids skinny triangles and gives clean local angle data.
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm II — Parity repair \& Kawasaki optimization}
+\begin{columns}[T,onlytextwidth]
+\column{0.48\textwidth}
+\begin{alertblock}{Necessary condition}
+Every interior vertex must have \alert{even degree}:
+\(d(v)\equiv 0\pmod 2.\)
+\end{alertblock}
+\smallskip
+\small\textbf{Repair.} Pair odd-degree vertices; delete the shortest path
+between each pair. \textcolor{cpmid}{(Heuristic — not globally optimal.)}
+
+\column{0.48\textwidth}
+\begin{block}{Kawasaki's theorem (local)}
+Sector angles \(\alpha_1,\dots,\alpha_{2m}\) must satisfy
+\[
+\alpha_1+\alpha_3+\cdots = \alpha_2+\alpha_4+\cdots = \pi.
+\]
+\end{block}
+\end{columns}
+
+\medskip
+\textbf{Geometry repair.} Let \(D(X)=\sum_{v} w_v\,\norm{X_v-X_{0,v}}^2\).
+Move vertices as little as possible, subject to the Kawasaki constraints:
+\[
+\min_{X}\;D(X)+\frac{\alpha}{2}\,D(X)^{2},
+\]
+Boundary weights \(w_v\) are large; interior weights are small. Solved with SLSQP.
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm III — Local constraints: Maekawa \& Bern--Hayes}
+\begin{columns}[T,onlytextwidth]
+\column{0.46\textwidth}
+\begin{block}{Maekawa's theorem (local)}
+At every interior vertex,
+\[
+M(v)-V(v)=\pm 2.
+\]
+Used as an \textbf{admissibility filter}: reject any assignment violating
+this anywhere.
+\end{block}
+
+\column{0.50\textwidth}
+\textbf{Bern--Hayes-style reduction}\\[4pt]
+For each vertex, repeatedly \alert{remove the smallest sector}: its two
+bounding creases are forced \emph{equal} or \emph{opposite} in sign.
+\smallskip
+\begin{enumerate}\small
+  \item Sort creases around the vertex by angle.
+  \item Find the smallest wedge; record its forced sign relation.
+  \item Recurse until the vertex is fully resolved.
+\end{enumerate}
+\smallskip
+\textcolor{cpmid}{\small Boundary vertices get temporary virtual rays to close the cyclic order.}
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm III — Merging, exact search, \& interlacing}
+Each vertex reduction yields sign chains:
+\[
+\sigma(e_i)=\sigma(e_j)\quad\text{or}\quad\sigma(e_i)=-\sigma(e_j).
+\]
+\begin{columns}[T,onlytextwidth]
+\column{0.52\textwidth}
+\textbf{Exact search}
+\begin{itemize}\small
+  \item Merge chains across shared creases into \(g\) free groups.
+  \item Enumerate all \(2^g\) seed assignments; propagate implied signs.
+  \item Keep only assignments that pass Maekawa at every vertex.
+\end{itemize}
+\textcolor{cpmid}{\small Undetermined creases keep label \(-1\); no sign is invented.}
+
+\column{0.44\textwidth}
+\begin{block}{Interlacing preference}
+\small Among admissible assignments, prefer
+\(M,V,M,V,\ldots\) over \(M,M,V,V,\ldots\); weight sharper wedges more.\\[4pt]
+\alert{Does not affect correctness.}
+\end{block}
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm IV — Faces, reflection \& 3D animation}
+\begin{columns}[T,onlytextwidth]
+\column{0.48\textwidth}
+\textbf{Face extraction}\\[4pt]
+\small Trace half-edges in order; each bounded counterclockwise cycle defines one face.
+Faces are then triangulated by ear clipping for rendering.
+
+\medskip
+\begin{block}{Reflection rule}
+\small If two faces share crease \(\ell\), the child is the parent reflected
+in \(\ell\). Propagated from a root face outward; if any cycle is inconsistent,
+the method falls back to per-triangle propagation along a spanning tree.
+\end{block}
+
+\column{0.48\textwidth}
+\textbf{Kinematic animation}\\[4pt]
+Around crease axis \((p,q)\), with sign \(\sigma(e)\in\{\pm 1\}\) and fold
+angle \(\theta\):
+\[
+T_{\text{child}} = R_{(p,q)}\!\bigl(\sigma(e)\,\theta\bigr)\,T_{\text{parent}}.
+\]
+\small Rigid plates connected by hinge creases — no elasticity, no collisions.
+Near the fully folded state, small offsets along the surface normal keep
+layer order visible.
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Exact vs.\ heuristic — and conclusion}
+\begin{columns}[T,onlytextwidth]
+\column{0.46\textwidth}
+\begin{block}{Exact (in this model)}
+\begin{itemize}\small
+  \item Parity condition enforced.
+  \item Kawasaki solved to tolerance.
+  \item Maekawa filters every MV candidate.
+  \item Reflection cycles checked for consistency.
+\end{itemize}
+\end{block}
+
+\column{0.50\textwidth}
+\begin{block}{Heuristic / design-driven}
+\begin{itemize}\small
+  \item Parity repair is not globally optimal.
+  \item Objective measures drift, not physical energy.
+  \item Bern--Hayes is local; not a full global classifier.
+  \item Interlacing score is aesthetic only.
+\end{itemize}
+\end{block}
+\end{columns}
+
+\bigskip
+\centering\small
+Delaunay graph $\;\to\;$ Kawasaki repair $\;\to\;$ MV search $\;\to\;$ animated 3D fold.\\[6pt]
+\textbf{\large\alert{Thank you.}}
+\end{frame}
+
+\end{document}
