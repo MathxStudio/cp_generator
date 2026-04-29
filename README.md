@@ -205,6 +205,16 @@ cp_generator/
 
 ---
 
+## Credits
+
+`box_head.png` and the crease-pattern data in `box_head_sample.py` are
+reconstructed from **"Box Head – 16×16 Grid"** by **Boice** (Origami by Boice),
+designed for the East Bay Origami Convention 2024.
+
+Source: <https://www.obb.design/crease-patterns/box-head---16x16-grid>
+
+---
+
 ## Report
 
 `report/crease_pattern_methods.tex` is a concise Beamer presentation covering

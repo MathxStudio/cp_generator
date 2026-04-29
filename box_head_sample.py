@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+# Crease pattern reconstructed from "Box Head – 16×16 Grid" by Boice (Origami by Boice).
+# Designed for the East Bay Origami Convention 2024.
+# Source: https://www.obb.design/crease-patterns/box-head---16x16-grid
+
 import cp
 
 
