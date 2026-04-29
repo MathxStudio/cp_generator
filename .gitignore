@@ -9,7 +9,7 @@ cp.png
 cp.svg
 
 # Personal session state
-fold_session.cpfold.json
+# fold_session.cpfold.json
 
 # AI / editor config
 .claude/
