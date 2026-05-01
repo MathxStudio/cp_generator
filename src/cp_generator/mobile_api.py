@@ -8,6 +8,7 @@ from .samples import box_head as box_head_sample
 
 
 MODEL_SIDE = 500
+PREVIEW_FRAME_COUNT = 13
 
 
 def build_random_pattern(point_count: int) -> str:
@@ -43,6 +44,36 @@ def optimize_pattern(pattern_json: str, rounds: int = 1) -> str:
     )
 
 
+def optimize_until_local_green(pattern_json: str, max_rounds: int = 8) -> str:
+    pattern = cp.CreasePattern.from_data(json.loads(pattern_json))
+    result = _optimize_until_local_green(pattern, max_rounds=max_rounds)
+    if result["green"]:
+        title = "Local green"
+        message = f"Local flat-fold checks passed after {result['rounds']} optimization round{'s' if result['rounds'] != 1 else ''}."
+        note = "The sheet is locally valid. Assign mountain and valley folds next to continue toward a full foldability check."
+    else:
+        title = "Needs work"
+        message = f"Stopped after {result['rounds']} optimization round{'s' if result['rounds'] != 1 else ''} without a green local badge."
+        note = "The geometry improved, but at least one interior vertex still fails an even-degree or Kawasaki check."
+    return _snapshot(
+        pattern,
+        point_count=None,
+        status_title=title,
+        status_message=message,
+        note=note,
+        automation={
+            "kind": "local_green",
+            "found": bool(result["green"]),
+            "attempts": 1,
+            "max_attempts": 1,
+            "rounds": int(result["rounds"]),
+            "max_rounds": max(1, int(max_rounds)),
+            "iterations": int(result["iterations"]),
+            "loss": result["loss"],
+        },
+    )
+
+
 def assign_pattern(pattern_json: str) -> str:
     pattern = cp.CreasePattern.from_data(json.loads(pattern_json))
     result = pattern.assign_mv()
@@ -58,6 +89,86 @@ def assign_pattern(pattern_json: str) -> str:
         status_title="No assignment",
         status_message="No locally admissible mountain and valley assignment was found.",
         note=result.message,
+    )
+
+
+def auto_all_green(
+    point_count: int,
+    max_attempts: int = 16,
+    max_local_rounds: int = 8,
+) -> str:
+    point_count = max(0, int(point_count))
+    max_attempts = max(1, int(max_attempts))
+    max_local_rounds = max(1, int(max_local_rounds))
+
+    winning_pattern: cp.CreasePattern | None = None
+    winning_attempt = 0
+    last_assignment_message = "No search attempt was executed."
+    last_optimize = {
+        "green": False,
+        "rounds": 0,
+        "iterations": 0,
+        "loss": None,
+    }
+    last_preview_message = "No folded figure was evaluated yet."
+
+    for attempt in range(1, max_attempts + 1):
+        pattern = _build_pattern(point_count)
+        optimize_result = _optimize_until_local_green(pattern, max_rounds=max_local_rounds)
+        assign_result = pattern.assign_mv()
+        last_assignment_message = assign_result.message
+
+        report = pattern.analyze_pattern()
+        _, preview_diagnostic, _ = _build_preview(pattern)
+        merged = _merge_report_with_preview(report, preview_diagnostic)
+        last_optimize = optimize_result
+        last_preview_message = preview_diagnostic.message
+
+        if _all_green(merged):
+            winning_pattern = pattern
+            winning_attempt = attempt
+            break
+
+        winning_pattern = pattern
+        winning_attempt = attempt
+
+    if winning_pattern is None:
+        winning_pattern = _build_pattern(point_count)
+
+    report = winning_pattern.analyze_pattern()
+    _, preview_diagnostic, _ = _build_preview(winning_pattern)
+    merged = _merge_report_with_preview(report, preview_diagnostic)
+    found = _all_green(merged)
+
+    if found:
+        status_title = "All green"
+        status_message = f"Found a fully green sheet on attempt {winning_attempt}."
+        note = (
+            f"Local, assignment, global, and preview diagnostics all passed. "
+            f"The last search used {last_optimize['rounds']} local optimization round"
+            f"{'s' if last_optimize['rounds'] != 1 else ''}."
+        )
+    else:
+        status_title = "Search stopped"
+        status_message = f"Checked {winning_attempt} random sheet{'s' if winning_attempt != 1 else ''} without finding an all-green result."
+        note = f"{last_assignment_message} {last_preview_message}"
+
+    return _snapshot(
+        winning_pattern,
+        point_count=point_count,
+        status_title=status_title,
+        status_message=status_message,
+        note=note,
+        automation={
+            "kind": "all_green",
+            "found": found,
+            "attempts": winning_attempt,
+            "max_attempts": max_attempts,
+            "rounds": int(last_optimize["rounds"]),
+            "max_rounds": max_local_rounds,
+            "iterations": int(last_optimize["iterations"]),
+            "loss": last_optimize["loss"],
+        },
     )
 
 
@@ -91,6 +202,43 @@ def _clear_assignments(pattern: cp.CreasePattern) -> None:
         fold.type = -1
 
 
+def _optimize_until_local_green(
+    pattern: cp.CreasePattern,
+    *,
+    max_rounds: int,
+) -> dict[str, object]:
+    max_rounds = max(1, int(max_rounds))
+    report = pattern.analyze_pattern()
+    if report.local_status == cp.STATUS_PASS:
+        return {
+            "green": True,
+            "rounds": 0,
+            "iterations": 0,
+            "loss": None,
+        }
+
+    rounds = 0
+    total_iterations = 0
+    last_loss: float | None = None
+    while rounds < max_rounds:
+        rounds += 1
+        result = pattern.optimize()
+        total_iterations += int(getattr(result, "nit", 0) or 0)
+        loss = getattr(result, "fun", None)
+        last_loss = float(loss) if loss is not None else None
+        _clear_assignments(pattern)
+        report = pattern.analyze_pattern()
+        if report.local_status == cp.STATUS_PASS:
+            break
+
+    return {
+        "green": report.local_status == cp.STATUS_PASS,
+        "rounds": rounds,
+        "iterations": total_iterations,
+        "loss": last_loss,
+    }
+
+
 def _snapshot(
     pattern: cp.CreasePattern,
     *,
@@ -99,24 +247,29 @@ def _snapshot(
     note: str,
     point_count: int | None = None,
     sample_key: str | None = None,
+    automation: dict[str, object] | None = None,
 ) -> str:
     report = pattern.analyze_pattern()
-    preview = _preview_diagnostic(pattern, sample_key=sample_key)
-    assignment = report.fold_assignment
+    preview_model, preview_diagnostic, preview_payload = _build_preview(
+        pattern,
+        sample_key=sample_key,
+    )
+    merged = _merge_report_with_preview(report, preview_diagnostic)
+    assignment = merged.fold_assignment
     data_json = json.dumps(pattern.to_data(), separators=(",", ":"), sort_keys=True)
 
     payload = {
         "pattern_json": data_json,
         "title": "CP Generator",
         "subtitle": _subtitle(sample_key, point_count),
-        "summary": report.summary[0] if report.summary else preview.message,
+        "summary": _summary_text(merged, preview_diagnostic),
         "note": note,
         "point_count": point_count,
         "sample_key": sample_key,
         "status": {
             "title": status_title,
             "message": status_message,
-            "tone": _tone_for_status(_dominant_status(report, preview)),
+            "tone": _tone_for_status(_dominant_status(merged)),
         },
         "stats": {
             "vertices": len(pattern.vertices),
@@ -124,59 +277,69 @@ def _snapshot(
             "interior_vertices": len(pattern.none_edge_vertices()),
             "assigned_folds": assignment.assigned_fold_count,
             "unassigned_folds": assignment.unassigned_fold_count,
-            "face_count": preview.face_count,
+            "face_count": preview_diagnostic.face_count,
         },
         "diagnostics": [
             _diagnostic_payload(
                 "local",
                 "Local",
-                report.local_status,
-                _local_message(report),
+                merged.local_status,
+                _local_message(merged),
             ),
             _diagnostic_payload(
                 "assignment",
                 "Assignment",
-                report.fold_assignment_status,
-                _assignment_message(report),
+                merged.fold_assignment_status,
+                _assignment_message(merged),
             ),
             _diagnostic_payload(
                 "global",
                 "Global",
-                report.global_status,
-                report.global_diagnostic.message,
+                merged.global_status,
+                merged.global_diagnostic.message,
             ),
             _diagnostic_payload(
                 "preview",
                 "Preview",
-                preview.status,
-                preview.message,
+                merged.preview_status,
+                preview_diagnostic.message,
             ),
         ],
         "stage": _stage_payload(pattern),
+        "preview": preview_payload,
+        "automation": automation,
+        "preview_ready": preview_model is not None,
     }
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-def _preview_diagnostic(
+def _build_preview(
     pattern: cp.CreasePattern,
     *,
     sample_key: str | None = None,
-) -> fold_sim.FoldSimulationDiagnostic:
+) -> tuple[
+    fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | fold_sim.ScriptedFoldedFigureModel | None,
+    fold_sim.FoldSimulationDiagnostic,
+    dict[str, object] | None,
+]:
+    assignment = pattern.analyze_assignments()
     if sample_key == box_head_sample.BOX_HEAD_KEY:
-        return fold_sim.FoldSimulationDiagnostic(
-            status=cp.STATUS_PASS,
-            face_count=None,
-            uses_provisional_signs=False,
-            uses_approximate_cycles=False,
-            cycle_drift=None,
-            crossing_fold_pairs=(),
-            message="The authored sample is preassigned and ready for crease inspection in the mobile layout.",
-            preview_mode="none",
+        model = fold_sim.build_box_head_figure(pattern.clone())
+        diagnostic = fold_sim.FoldSimulationDiagnostic(
+            status=cp.STATUS_WARNING,
+            face_count=getattr(model, "face_count", None),
+            uses_provisional_signs=getattr(model, "uses_provisional_signs", False),
+            uses_approximate_cycles=getattr(model, "uses_approximate_cycles", False),
+            cycle_drift=getattr(model, "cycle_drift", None),
+            crossing_fold_pairs=pattern.crossing_fold_pairs(),
+            message="The Box Head sample uses an authored 3D finish rather than a plain exact-fold certificate.",
+            preview_mode="scripted",
             used_reference_pattern=False,
         )
-    assignment = pattern.analyze_assignments()
+        return model, diagnostic, _preview_payload(model, diagnostic)
+
     if not pattern.vertices:
-        return fold_sim.FoldSimulationDiagnostic(
+        diagnostic = fold_sim.FoldSimulationDiagnostic(
             status=cp.STATUS_NOT_RUN,
             face_count=None,
             uses_provisional_signs=False,
@@ -187,8 +350,10 @@ def _preview_diagnostic(
             preview_mode="none",
             used_reference_pattern=False,
         )
+        return None, diagnostic, None
+
     if not pattern.folds:
-        return fold_sim.FoldSimulationDiagnostic(
+        diagnostic = fold_sim.FoldSimulationDiagnostic(
             status=cp.STATUS_NOT_RUN,
             face_count=None,
             uses_provisional_signs=False,
@@ -199,8 +364,10 @@ def _preview_diagnostic(
             preview_mode="none",
             used_reference_pattern=False,
         )
+        return None, diagnostic, None
+
     if assignment.assigned_fold_count == 0:
-        return fold_sim.FoldSimulationDiagnostic(
+        diagnostic = fold_sim.FoldSimulationDiagnostic(
             status=cp.STATUS_NOT_RUN,
             face_count=None,
             uses_provisional_signs=False,
@@ -211,7 +378,152 @@ def _preview_diagnostic(
             preview_mode="none",
             used_reference_pattern=False,
         )
-    return fold_sim.analyze_foldability(pattern.clone())
+        return None, diagnostic, None
+
+    exact_model, exact_diagnostic = fold_sim.try_build_folded_figure(pattern.clone())
+    if exact_model is not None:
+        return exact_model, exact_diagnostic, _preview_payload(exact_model, exact_diagnostic)
+
+    try:
+        mesh_model = fold_sim.build_approximate_folded_figure_with_mode(
+            pattern.clone(),
+            spatial_mode=True,
+        )
+    except fold_sim.FoldSimulationError as exc:
+        diagnostic = fold_sim.FoldSimulationDiagnostic(
+            status=cp.STATUS_FAIL,
+            face_count=None,
+            uses_provisional_signs=False,
+            uses_approximate_cycles=False,
+            cycle_drift=None,
+            crossing_fold_pairs=pattern.crossing_fold_pairs(),
+            message=f"{exact_diagnostic.message} Mesh fallback also failed: {exc}",
+            preview_mode="none",
+            used_reference_pattern=False,
+        )
+        return None, diagnostic, None
+
+    mesh_diagnostic = fold_sim.FoldSimulationDiagnostic(
+        status=cp.STATUS_WARNING,
+        face_count=getattr(mesh_model, "face_count", None),
+        uses_provisional_signs=mesh_model.uses_provisional_signs,
+        uses_approximate_cycles=mesh_model.uses_approximate_cycles,
+        cycle_drift=mesh_model.cycle_drift,
+        crossing_fold_pairs=pattern.crossing_fold_pairs(),
+        message="The exact face solver rejected this sheet, so the 3D preview uses a guarded mesh fallback.",
+        preview_mode="mesh",
+        used_reference_pattern=False,
+    )
+    return mesh_model, mesh_diagnostic, _preview_payload(mesh_model, mesh_diagnostic)
+
+
+def _preview_payload(
+    model: fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | fold_sim.ScriptedFoldedFigureModel,
+    diagnostic: fold_sim.FoldSimulationDiagnostic,
+) -> dict[str, object]:
+    frames = []
+    all_points = []
+    for step in range(PREVIEW_FRAME_COUNT):
+        progress = 0.0 if PREVIEW_FRAME_COUNT == 1 else step / (PREVIEW_FRAME_COUNT - 1)
+        states = model.frame(progress)
+        faces = []
+        for state in states:
+            points = [
+                {
+                    "x": float(point[0]),
+                    "y": float(point[1]),
+                    "z": float(point[2]) if len(point) > 2 else 0.0,
+                }
+                for point in state.points
+            ]
+            all_points.extend(points)
+            faces.append(
+                {
+                    "index": int(state.index),
+                    "points": points,
+                    "top_surface": bool(state.top_surface),
+                }
+            )
+        frames.append(
+            {
+                "progress": float(progress),
+                "faces": faces,
+            }
+        )
+
+    if all_points:
+        min_x = min(point["x"] for point in all_points)
+        max_x = max(point["x"] for point in all_points)
+        min_y = min(point["y"] for point in all_points)
+        max_y = max(point["y"] for point in all_points)
+        min_z = min(point["z"] for point in all_points)
+        max_z = max(point["z"] for point in all_points)
+    else:
+        min_x = max_x = min_y = max_y = min_z = max_z = 0.0
+
+    return {
+        "mode": diagnostic.preview_mode,
+        "message": diagnostic.message,
+        "face_count": diagnostic.face_count,
+        "uses_provisional_signs": diagnostic.uses_provisional_signs,
+        "uses_approximate_cycles": diagnostic.uses_approximate_cycles,
+        "cycle_drift": diagnostic.cycle_drift,
+        "is_mesh_approximation": bool(getattr(model, "is_mesh_approximation", False)),
+        "frames": frames,
+        "bounds": {
+            "min_x": min_x,
+            "max_x": max_x,
+            "min_y": min_y,
+            "max_y": max_y,
+            "min_z": min_z,
+            "max_z": max_z,
+        },
+    }
+
+
+def _merge_report_with_preview(
+    report: cp.PatternDiagnosticReport,
+    preview: fold_sim.FoldSimulationDiagnostic,
+) -> cp.PatternDiagnosticReport:
+    global_status = report.global_status
+    global_message = report.global_diagnostic.message
+    if preview.status != cp.STATUS_NOT_RUN:
+        global_message = preview.message or global_message
+        if global_status != cp.STATUS_FAIL:
+            global_status = preview.status
+
+    return cp.PatternDiagnosticReport(
+        local_status=report.local_status,
+        global_status=global_status,
+        preview_status=preview.status,
+        fold_assignment_status=report.fold_assignment_status,
+        vertex_diagnostics=report.vertex_diagnostics,
+        fold_assignment=report.fold_assignment,
+        global_diagnostic=cp.GlobalDiagnostic(
+            status=global_status,
+            used_exact_faces=(preview.preview_mode == "exact"),
+            used_reference_pattern=preview.used_reference_pattern,
+            uses_provisional_signs=preview.uses_provisional_signs,
+            uses_approximate_cycles=preview.uses_approximate_cycles,
+            cycle_drift=preview.cycle_drift,
+            crossing_fold_pairs=preview.crossing_fold_pairs or report.global_diagnostic.crossing_fold_pairs,
+            face_count=preview.face_count,
+            message=global_message,
+        ),
+        summary=report.summary,
+    )
+
+
+def _all_green(report: cp.PatternDiagnosticReport) -> bool:
+    return all(
+        status == cp.STATUS_PASS
+        for status in (
+            report.local_status,
+            report.fold_assignment_status,
+            report.global_status,
+            report.preview_status,
+        )
+    )
 
 
 def _stage_payload(pattern: cp.CreasePattern) -> dict[str, object]:
@@ -276,12 +588,18 @@ def _subtitle(sample_key: str | None, point_count: int | None) -> str:
     return f"{point_count}-point random study"
 
 
-def _dominant_status(
+def _summary_text(
     report: cp.PatternDiagnosticReport,
     preview: fold_sim.FoldSimulationDiagnostic,
 ) -> str:
+    if report.summary:
+        return report.summary[0]
+    return preview.message
+
+
+def _dominant_status(report: cp.PatternDiagnosticReport) -> str:
     statuses = (
-        preview.status,
+        report.preview_status,
         report.global_status,
         report.fold_assignment_status,
         report.local_status,

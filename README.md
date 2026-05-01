@@ -177,9 +177,10 @@ The repository now includes a native Android shell under `android-app/`.
 The Android UI intentionally stays compact:
 
 - a square crease-sheet stage sized for vertical screens
-- one-touch actions for randomize, refine, assign, and sample loading
+- one-touch actions for randomize, refine, assign, local automation, and full all-green search
+- a 3D folded preview with drag rotation and fold-progress scrubbing
 - compact diagnostics and stats beneath the stage instead of a desktop-style multi-pane layout
-- a deliberately lean first release focused on crease exploration rather than the full desktop 3D control surface
+- an in-app updater that watches the GitHub release channel for newer APKs
 
 For more detail, see `android-app/README.md`.
 

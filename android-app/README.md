@@ -5,13 +5,24 @@ This directory contains a native Android shell for CP Generator.
 - UI: Kotlin + Jetpack Compose
 - Engine: shared Python package `cp_generator` via Chaquopy
 - Layout target: portrait-first phone screens
-- Product focus: fast crease generation, refinement, assignment, and diagnostics on a vertical phone display
+- Product focus: fast crease generation, refinement, assignment, 3D folding preview, and diagnostics on a vertical phone display
 
-The Android shell is intentionally lean in this first version:
+The Android shell now includes the main mobile-friendly parts of the desktop workflow:
 
 - it preserves the origami engine and diagnostic pipeline
 - it renders the crease sheet directly in Compose
-- it does not yet replicate the full desktop Tkinter multi-pane workflow or 3D preview controls
+- it includes a 3D folded-figure preview with drag rotation and fold-progress scrubbing
+- it includes local automation and full "auto all green" search
+- it can check the GitHub release channel for a newer APK and hand that APK to Android's installer
+
+## Update channel
+
+The in-app updater checks the repository's **GitHub Releases** feed, not temporary
+workflow artifacts. That means:
+
+- `build-artifacts` is still useful for quick testing APKs
+- the updater expects a published release containing an `.apk` asset
+- for real upgrade continuity between installed versions, that release APK should be signed consistently
 
 ## Local build
 
