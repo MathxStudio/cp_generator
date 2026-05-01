@@ -95,7 +95,7 @@ extract, and launch.
 ## Build artifacts via GitHub Actions
 
 The main workflow file is `.github/workflows/build-artifacts.yml`. It runs
-automatically on every push to `main`, and can also be triggered manually.
+automatically on every push, and can also be triggered manually.
 Each successful run puts the desktop bundles and Android APK in one place.
 
 ### Trigger manually (no code push needed)
@@ -172,7 +172,7 @@ The repository now includes a native Android shell under `android-app/`.
 
 - **UI:** Kotlin + Jetpack Compose, tuned for portrait phone screens
 - **Engine:** the shared Python package under `src/cp_generator/`, bridged into Android through Chaquopy
-- **Workflow:** `build-artifacts` uploads the Android APK alongside the desktop bundles on every push to `main`
+- **Workflow:** `build-artifacts` uploads the Android APK alongside the desktop bundles on every push
 
 The Android UI intentionally stays compact:
 
