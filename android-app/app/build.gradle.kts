@@ -62,9 +62,14 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         pip {
-            install("--no-deps", pythonProjectRoot)
             install("numpy==1.26.4")
             install("scipy==1.13.1")
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            srcDir("$pythonProjectRoot/src")
         }
     }
 }
