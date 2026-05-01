@@ -2,9 +2,6 @@ name: portable-build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   build:

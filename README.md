@@ -14,7 +14,7 @@ A desktop application for generating, optimizing, and animating origami crease p
 
 - [Run from source](#run-from-source)
 - [Run a pre-built portable bundle](#run-a-pre-built-portable-bundle)
-- [Build portable bundles via GitHub Actions](#build-portable-bundles-via-github-actions)
+- [Build artifacts via GitHub Actions](#build-artifacts-via-github-actions)
 - [Download artifacts with the helper script](#download-artifacts-with-the-helper-script)
 - [Windows launcher](#windows-launcher)
 - [Features](#features)
@@ -61,15 +61,17 @@ cp-generator
 
 ## Run a pre-built portable bundle
 
-Pre-built bundles are attached as artifacts to every GitHub Actions run.
-They require **no Python installation** — just download, extract, and launch.
+Pre-built bundles are attached as artifacts to every successful `build-artifacts`
+GitHub Actions run. They require **no Python installation** — just download,
+extract, and launch.
 
-1. Go to **Actions** → **portable-build** on the repository page.
+1. Go to **Actions** → **build-artifacts** on the repository page.
 2. Click the most recent successful run.
 3. Under **Artifacts**, download the archive for your platform:
-   - `CPGenerator-linux.tar.gz` → Linux x86-64
-   - `CPGenerator-windows.zip` → Windows x86-64
-   - `CPGenerator-macos.zip` → macOS (arm64 / x86-64 depending on runner)
+   - `cp-generator-linux-portable.tar.gz` → Linux x86-64
+   - `cp-generator-windows-portable.zip` → Windows x86-64
+   - `cp-generator-macos-portable.zip` → macOS (arm64 / x86-64 depending on runner)
+   - `cp-generator-android-debug-apk` → Android debug APK artifact
 4. Extract and run:
 
    ```bash
@@ -90,16 +92,17 @@ They require **no Python installation** — just download, extract, and launch.
 
 ---
 
-## Build portable bundles via GitHub Actions
+## Build artifacts via GitHub Actions
 
-The workflow file is `.github/workflows/portable-build.yml`. It runs
+The main workflow file is `.github/workflows/build-artifacts.yml`. It runs
 automatically on every push to `main`, and can also be triggered manually.
+Each successful run puts the desktop bundles and Android APK in one place.
 
 ### Trigger manually (no code push needed)
 
 **Via the GitHub web UI:**
 
-1. Go to **Actions** → **portable-build** → **Run workflow**.
+1. Go to **Actions** → **build-artifacts** → **Run workflow**.
 2. Select the branch (default: `main`) and click **Run workflow**.
 3. Refresh the page after a few seconds to see the run appear.
 4. Wait for all three matrix jobs (Linux, Windows, macOS) to complete — usually
@@ -110,10 +113,10 @@ automatically on every push to `main`, and can also be triggered manually.
 
 ```bash
 # trigger and wait (requires gh auth login)
-gh workflow run portable-build.yml --repo MathxStudio/cp_generator
+gh workflow run build-artifacts.yml --repo MathxStudio/cp_generator
 
 # watch progress
-gh run list --workflow portable-build.yml --repo MathxStudio/cp_generator --limit 1
+gh run list --workflow build-artifacts.yml --repo MathxStudio/cp_generator --limit 1
 gh run watch <RUN_ID> --repo MathxStudio/cp_generator
 ```
 
@@ -126,14 +129,16 @@ gh run watch <RUN_ID> --repo MathxStudio/cp_generator
 | **uv** | Installs [uv](https://docs.astral.sh/uv/) and runs `uv sync --all-groups` to pin exact dependency versions from `uv.lock` |
 | **PyInstaller** | Freezes the app into a self-contained `dist/CPGenerator/` directory with `--onedir --windowed` |
 | **Archive** | Packs the directory into a platform-appropriate archive |
-| **Upload** | Attaches the archive as a GitHub Actions artifact (retained for 30 days) |
+| **Android** | Builds `app-debug.apk` with Gradle + Chaquopy on Ubuntu |
+| **Upload** | Attaches all desktop archives plus the Android APK as GitHub Actions artifacts (retained for 30 days) |
 
 ---
 
 ## Download artifacts with the helper script
 
-`scripts/package_portable.sh` automates the trigger-wait-download cycle using
-the `gh` CLI.
+`scripts/package_portable.sh` still automates the desktop trigger-wait-download
+cycle using the `gh` CLI. The new unified workflow is the easiest path if you
+want Android and desktop artifacts from the same run.
 
 ```bash
 # prerequisites: gh must be authenticated (gh auth login)
@@ -167,7 +172,7 @@ The repository now includes a native Android shell under `android-app/`.
 
 - **UI:** Kotlin + Jetpack Compose, tuned for portrait phone screens
 - **Engine:** the shared Python package under `src/cp_generator/`, bridged into Android through Chaquopy
-- **Workflow:** GitHub Actions builds an installable debug APK and uploads it as an artifact
+- **Workflow:** `build-artifacts` uploads the Android APK alongside the desktop bundles on every push to `main`
 
 The Android UI intentionally stays compact:
 
@@ -241,8 +246,9 @@ cp_generator/
 │   └── package_portable.sh  # trigger CI build and download artifacts
 ├── .github/
 │   └── workflows/
-│       ├── portable-build.yml  # CI matrix build (Linux / Windows / macOS)
-│       └── android-build.yml   # CI build for the Android debug APK
+│       ├── build-artifacts.yml # unified CI artifacts run (desktop + Android)
+│       ├── portable-build.yml  # manual-only desktop build workflow
+│       └── android-build.yml   # manual-only Android build workflow
 └── report/
     ├── crease_pattern_methods.tex  # LaTeX source (Beamer presentation)
     └── crease_pattern_methods.pdf  # compiled presentation
