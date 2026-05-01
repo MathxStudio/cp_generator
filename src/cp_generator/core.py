@@ -5,8 +5,15 @@ import numpy as np
 import math
 from scipy.optimize import minimize
 from itertools import product
-import svgwrite
-from cairosvg import svg2png
+try:
+    import svgwrite
+except ImportError:  # pragma: no cover - optional at runtime for mobile builds
+    svgwrite = None
+
+try:
+    from cairosvg import svg2png
+except ImportError:  # pragma: no cover - optional at runtime for mobile builds
+    svg2png = None
 
 
 STATUS_PASS = "pass"
@@ -1228,6 +1235,8 @@ class CreasePattern():
 
     def get_svg(self, length):
         # return the svg of the crease pattern
+        if svgwrite is None:
+            raise RuntimeError("SVG export requires the optional 'svgwrite' dependency.")
         # first, scale the crease pattern by size
         self.normalize()
         self.scale(length)
@@ -1264,4 +1273,5 @@ class CreasePattern():
         dwg.saveas(filename)
 
         # convert to png too
-        svg2png(url=filename, write_to=filename[:-4] + ".png")
+        if svg2png is not None:
+            svg2png(url=filename, write_to=filename[:-4] + ".png")

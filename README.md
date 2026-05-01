@@ -20,6 +20,7 @@ A desktop application for generating, optimizing, and animating origami crease p
 - [Features](#features)
 - [Session files](#session-files)
 - [Project layout](#project-layout)
+- [Android app](#android-app)
 - [Report](#report)
 
 ---
@@ -92,8 +93,7 @@ They require **no Python installation** — just download, extract, and launch.
 ## Build portable bundles via GitHub Actions
 
 The workflow file is `.github/workflows/portable-build.yml`. It runs
-automatically on every push to `main` or `master`, and can also be triggered
-manually.
+automatically on every push to `main`, and can also be triggered manually.
 
 ### Trigger manually (no code push needed)
 
@@ -161,6 +161,25 @@ a pre-built bundle. Double-click it from the project folder:
 
 ---
 
+## Android app
+
+The repository now includes a native Android shell under `android-app/`.
+
+- **UI:** Kotlin + Jetpack Compose, tuned for portrait phone screens
+- **Engine:** the shared Python package under `src/cp_generator/`, bridged into Android through Chaquopy
+- **Workflow:** GitHub Actions builds an installable debug APK and uploads it as an artifact
+
+The Android UI intentionally stays compact:
+
+- a square crease-sheet stage sized for vertical screens
+- one-touch actions for randomize, refine, assign, and sample loading
+- compact diagnostics and stats beneath the stage instead of a desktop-style multi-pane layout
+- a deliberately lean first release focused on crease exploration rather than the full desktop 3D control surface
+
+For more detail, see `android-app/README.md`.
+
+---
+
 ## Features
 
 - Random crease-pattern generation inside a square sheet
@@ -205,6 +224,11 @@ cp_generator/
 │   └── images/
 │       ├── box_head.png
 │       └── result.jpg
+├── android-app/
+│   ├── app/                 # native Android app module
+│   ├── build.gradle.kts     # Android build root
+│   ├── gradle.properties
+│   └── settings.gradle.kts
 ├── examples/
 │   ├── README.md
 │   └── sessions/
@@ -217,7 +241,8 @@ cp_generator/
 │   └── package_portable.sh  # trigger CI build and download artifacts
 ├── .github/
 │   └── workflows/
-│       └── portable-build.yml  # CI matrix build (Linux / Windows / macOS)
+│       ├── portable-build.yml  # CI matrix build (Linux / Windows / macOS)
+│       └── android-build.yml   # CI build for the Android debug APK
 └── report/
     ├── crease_pattern_methods.tex  # LaTeX source (Beamer presentation)
     └── crease_pattern_methods.pdf  # compiled presentation

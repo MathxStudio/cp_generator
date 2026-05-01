@@ -37,6 +37,17 @@ build/
 *.spec
 portable-dist/
 
+# Android artefacts
+android-app/.idea/
+android-app/.gradle/
+android-app/build/
+android-app/app/build/
+android-app/local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+
 # LaTeX build artefacts
 *.aux
 *.fdb_latexmk
