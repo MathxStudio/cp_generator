@@ -7,14 +7,29 @@
 # Generated CP output
 cp.png
 cp.svg
+crease_pattern.png
+crease_pattern.svg
+crease_pattern_methods.pdf
+exports/
+output/
 
 # Personal session state
-# fold_session.cpfold.json
+fold_session*.cpfold*.json
 
 # AI / editor config
 .claude/
 .codex
 SKILL.md
+
+# Planning notes
+ORIGAMI_THEORY_TODO.md
+PHASE1_DIAGNOSTICS_SPEC.md
+refs/
+
+# Local environments
+.venv/
+uv.exe
+uv.zip
 
 # PyInstaller artefacts
 dist/
@@ -23,6 +38,16 @@ build/
 portable-dist/
 
 # LaTeX build artefacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.xdv
+*.synctex.gz
 report/*.aux
 report/*.fdb_latexmk
 report/*.fls

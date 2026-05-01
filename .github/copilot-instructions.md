@@ -16,16 +16,16 @@ Extend this project to support multiple paper boundary symmetries and composed l
 
 ## Project-Fit Requirements
 
-- Keep amendments minimal and aligned with current structure (`cp.py`, `cp_gen.py`).
+- Keep amendments minimal and aligned with the packaged source layout under `src/cp_generator/`.
 - Preserve backward compatibility: square mode should remain the default behavior.
 - Prefer introducing a shape/layout boundary abstraction over rewriting core graph logic.
 
 ## Implementation Guidance
 
-- In `cp.py`, make boundary-dependent logic shape-aware (currently square-centric helpers such as edge/corner checks, edge snapping/removal, non-edge filtering, and boundary drawing).
+- In `src/cp_generator/core.py`, make boundary-dependent logic shape-aware (currently square-centric helpers such as edge/corner checks, edge snapping/removal, non-edge filtering, and boundary drawing).
 - Keep the main pipeline intact (`triangulate -> evenize_vertices -> remove_edge_folds -> optimize -> assign_mv`), adapting boundary checks so it works across all supported domains.
 - Add composition helpers to transform and merge piece-local CPs into a global CP (translate/rotate/reflect + coordinate remapping + fold parity handling for reflections).
-- In `cp_gen.py`, add UI options for paper mode and dimensions with sensible defaults and basic validation.
+- In `src/cp_generator/app.py`, add UI options for paper mode and dimensions with sensible defaults and basic validation.
 - Ensure SVG export draws the active boundary shape/layout, not only a square outline.
 
 ## Acceptance Expectations
