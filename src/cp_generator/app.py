@@ -9,9 +9,9 @@ from tkinter import font as tkfont
 
 import numpy as np
 
-import box_head_sample
-import cp
-import fold_sim
+from . import core as cp
+from . import fold_sim
+from .samples import box_head as box_head_sample
 
 
 DEFAULT_POINTS = 8
@@ -90,8 +90,22 @@ class CPGeneratorApp:
         "danger": ("#ed1515", "#ffffff"),
     }
 
+    DEFAULT_AUTO_LOCAL_ROUNDS = 8
+    DEFAULT_AUTO_FULL_ATTEMPTS = 24
+    DEFAULT_TEXT_SCALE = 1.0
+    MIN_TEXT_SCALE = 1.0
+    MAX_TEXT_SCALE = 2.0
+    TEXT_SCALE_STEP = 0.15
+    DEFAULT_SIDEBAR_WIDTH = 380
+    MIN_SIDEBAR_WIDTH = 300
+    MIN_STAGE_WIDTH = 560
+    SPLIT_STEP = 40
+
     def __init__(self, root: tk.Tk):
         self.root = root
+        self.user_text_scale = self.DEFAULT_TEXT_SCALE
+        self.ui_scale = 1.0
+        self.sidebar_width = self.DEFAULT_SIDEBAR_WIDTH
         self.root.title("CP Generator")
         self.root.geometry("1460x900")
         self.root.minsize(1220, 780)
@@ -101,6 +115,8 @@ class CPGeneratorApp:
         self.pattern = cp.CreasePattern()
         self.preview_model: fold_sim.FoldedFigureModel | None = None
         self.preview_reference_pattern: cp.CreasePattern | None = None
+        self.diagnostic_report: cp.PatternDiagnosticReport | None = None
+        self.fold_simulation_diagnostic: fold_sim.FoldSimulationDiagnostic | None = None
         self.sample_key: str | None = None
         self.fold_assignment_ready = False
         self._preview_job: str | None = None
@@ -113,6 +129,12 @@ class CPGeneratorApp:
         self._busy = False
 
         self.point_count_var = tk.StringVar(value=str(DEFAULT_POINTS))
+        self.auto_local_round_limit_var = tk.StringVar(
+            value=str(self.DEFAULT_AUTO_LOCAL_ROUNDS)
+        )
+        self.auto_full_attempt_limit_var = tk.StringVar(
+            value=str(self.DEFAULT_AUTO_FULL_ATTEMPTS)
+        )
         self.show_labels_var = tk.BooleanVar(value=False)
         self.preview_loop_var = tk.BooleanVar(value=True)
         self.preview_edge_families_var = tk.BooleanVar(value=False)
@@ -137,20 +159,48 @@ class CPGeneratorApp:
         self.preview_summary_var = tk.StringVar()
         self.preview_progress_text_var = tk.StringVar(value="Fold 0%")
         self.preview_button_var = tk.StringVar(value="Play Fold")
+        self.local_diag_var = tk.StringVar(value="Local: not_run")
+        self.assignment_diag_var = tk.StringVar(value="Assignment: not_run")
+        self.global_diag_var = tk.StringVar(value="Global: not_run")
+        self.preview_diag_var = tk.StringVar(value="Preview: not_run")
+        self.diagnostic_detail_var = tk.StringVar(
+            value="Diagnostics will appear after the sheet is analyzed."
+        )
+        self.optimize_metrics_var = tk.StringVar(
+            value="Optimizer: loss -, iterations -, rounds -"
+        )
+        self.automation_note_var = tk.StringVar(
+            value="Automation can keep refining the current sheet or search for a fully green one."
+        )
+        self.text_scale_var = tk.StringVar(value=self._text_scale_label())
         self._interactive_widgets: list[ttk.Widget] = []
         self._preview_widgets: list[ttk.Widget] = []
         self._wrap_labels: list[tuple[tk.Widget, tk.Widget, int, int, int | None]] = []
+        self._wrap_bound_parents: set[str] = set()
         self._wrap_refresh_job: str | None = None
+        self._sidebar_scroll_job: str | None = None
+        self._sheet_redraw_job: str | None = None
+        self._preview_redraw_job: str | None = None
+        self._split_apply_job: str | None = None
         self._closing = False
 
         self._build_fonts()
         self._configure_style()
         self._build_layout()
+        self._apply_text_scale()
         self.preview_caption_var.trace_add("write", self._refresh_preview_summary)
         self.preview_detail_var.trace_add("write", self._refresh_preview_summary)
         self._refresh_preview_summary()
         self.root.bind("<Configure>", self._queue_wrap_refresh, add="+")
+        self.root.bind("<Control-plus>", self._increase_text_scale, add="+")
+        self.root.bind("<Control-equal>", self._increase_text_scale, add="+")
+        self.root.bind("<Control-minus>", self._decrease_text_scale, add="+")
+        self.root.bind("<Control-0>", self._reset_text_scale, add="+")
+        self.root.bind_all("<MouseWheel>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self._on_global_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self._on_global_mousewheel, add="+")
         self._refresh_wrap_lengths()
+        self._refresh_diagnostics()
         self._set_status(
             "Fresh",
             "A new sheet is ready for exploration.",
@@ -160,42 +210,170 @@ class CPGeneratorApp:
         self._sync_preview_controls()
         self.make_cp(initial=True)
 
+    def _scale_px(self, value: int) -> int:
+        return max(int(round(value * self.ui_scale)), value)
+
+    def _scale_font(self, value: int) -> int:
+        return max(int(round(value * self.ui_scale * self.user_text_scale)), value)
+
+    def _text_scale_label(self) -> str:
+        return f"{int(round(self.user_text_scale * 100))}%"
+
     def _build_fonts(self) -> None:
         sans = self._pick_font_family(
+            "Inter",
             "Aptos",
             "Segoe UI",
             "SF Pro Display",
             "Helvetica Neue",
+            "Cantarell",
+            "Ubuntu",
+            "Arial",
+            "Liberation Sans Narrow",
             "Noto Sans",
             "Liberation Sans",
             "DejaVu Sans",
+            "Sans",
+            base_named_font="TkDefaultFont",
         )
         mono = self._pick_font_family(
+            "JetBrains Mono",
             "CaskaydiaCove Nerd Font Mono",
             "CaskaydiaCove NF",
             "CaskaydiaMono Nerd Font",
             "Cascadia Code",
             "JetBrainsMono Nerd Font",
+            "Liberation Mono",
             "DejaVu Sans Mono",
             "Consolas",
+            "Monospace",
+            base_named_font="TkFixedFont",
         )
-        self.fonts = {
-            "hero": tkfont.Font(family=sans, size=22, weight="bold"),
-            "title": tkfont.Font(family=sans, size=15, weight="bold"),
-            "section": tkfont.Font(family=sans, size=11, weight="bold"),
-            "body": tkfont.Font(family=sans, size=10),
-            "small": tkfont.Font(family=mono, size=9),
-            "button": tkfont.Font(family=mono, size=10, weight="bold"),
-            "stat_value": tkfont.Font(family=mono, size=15, weight="bold"),
-            "badge": tkfont.Font(family=mono, size=10, weight="bold"),
-            "stage_title": tkfont.Font(family=sans, size=18, weight="bold"),
-            "stage_body": tkfont.Font(family=sans, size=11),
-            "card_title": tkfont.Font(family=sans, size=13, weight="bold"),
-            "preview_hero": tkfont.Font(family=sans, size=16, weight="bold"),
-            "label": tkfont.Font(family=mono, size=9, weight="bold"),
+        self.font_specs = {
+            "hero": {"family": sans, "size": 22, "weight": "bold"},
+            "title": {"family": sans, "size": 15, "weight": "bold"},
+            "section": {"family": sans, "size": 11, "weight": "bold"},
+            "body": {"family": sans, "size": 10},
+            "small": {"family": mono, "size": 9, "base": "TkFixedFont"},
+            "button": {
+                "family": mono,
+                "size": 10,
+                "weight": "bold",
+                "base": "TkFixedFont",
+            },
+            "stat_value": {
+                "family": mono,
+                "size": 15,
+                "weight": "bold",
+                "base": "TkFixedFont",
+            },
+            "badge": {
+                "family": mono,
+                "size": 10,
+                "weight": "bold",
+                "base": "TkFixedFont",
+            },
+            "stage_title": {"family": sans, "size": 18, "weight": "bold"},
+            "stage_body": {"family": sans, "size": 11},
+            "card_title": {"family": sans, "size": 13, "weight": "bold"},
+            "preview_hero": {"family": sans, "size": 16, "weight": "bold"},
+            "label": {
+                "family": mono,
+                "size": 9,
+                "weight": "bold",
+                "base": "TkFixedFont",
+            },
         }
+        self.fonts: dict[str, tkfont.Font] = {}
+        for name, spec in self.font_specs.items():
+            base_font_name = spec.get("base", "TkDefaultFont")
+            base_font = tkfont.nametofont(base_font_name).copy()
+            options = {"size": self._scale_font(spec["size"])}
+            if spec["family"] is not None:
+                options["family"] = spec["family"]
+            if "weight" in spec:
+                options["weight"] = spec["weight"]
+            self.fonts[name] = base_font
+            self.fonts[name].configure(**options)
+        self._configure_named_fonts()
 
-    def _pick_font_family(self, *choices: str) -> str:
+    def _configure_named_fonts(self) -> None:
+        named_font_specs = {
+            "TkDefaultFont": {"source": "body"},
+            "TkTextFont": {"source": "body"},
+            "TkMenuFont": {"source": "body"},
+            "TkHeadingFont": {"source": "title"},
+            "TkCaptionFont": {"source": "small"},
+            "TkSmallCaptionFont": {"source": "small"},
+            "TkIconFont": {"source": "small"},
+            "TkTooltipFont": {"source": "small"},
+            "TkFixedFont": {"source": "small"},
+        }
+        for font_name, spec in named_font_specs.items():
+            try:
+                named_font = tkfont.nametofont(font_name)
+            except tk.TclError:
+                continue
+            source_font = self.fonts[spec["source"]]
+            configure_kwargs = {
+                "size": source_font.cget("size"),
+                "weight": source_font.cget("weight"),
+            }
+            family = source_font.cget("family")
+            if family:
+                configure_kwargs["family"] = family
+            named_font.configure(**configure_kwargs)
+
+    def _apply_text_scale(self) -> None:
+        for name, spec in self.font_specs.items():
+            self.fonts[name].configure(size=self._scale_font(spec["size"]))
+        self._configure_named_fonts()
+        self.text_scale_var.set(self._text_scale_label())
+        if hasattr(self, "text_scale_down_button"):
+            can_decrease = self.user_text_scale > self.MIN_TEXT_SCALE + 1e-9
+            self.text_scale_down_button.state(
+                ["!disabled"] if can_decrease else ["disabled"]
+            )
+        if hasattr(self, "text_scale_up_button"):
+            can_increase = self.user_text_scale < self.MAX_TEXT_SCALE - 1e-9
+            self.text_scale_up_button.state(
+                ["!disabled"] if can_increase else ["disabled"]
+            )
+        self._configure_style()
+        self._queue_wrap_refresh()
+        if hasattr(self, "sidebar_canvas"):
+            self._queue_sidebar_scrollregion_sync()
+        if hasattr(self, "split_view"):
+            self._queue_apply_sidebar_split()
+        if hasattr(self, "canvas"):
+            self._queue_sheet_redraw()
+            self._queue_preview_redraw()
+
+    def _set_text_scale(self, value: float) -> None:
+        clamped = max(self.MIN_TEXT_SCALE, min(value, self.MAX_TEXT_SCALE))
+        if abs(clamped - self.user_text_scale) < 1e-9:
+            return
+        self.user_text_scale = clamped
+        self._apply_text_scale()
+
+    def _change_text_scale(self, delta: float) -> None:
+        self._set_text_scale(self.user_text_scale + delta)
+
+    def _increase_text_scale(self, _event: tk.Event | None = None) -> str | None:
+        self._change_text_scale(self.TEXT_SCALE_STEP)
+        return "break"
+
+    def _decrease_text_scale(self, _event: tk.Event | None = None) -> str | None:
+        self._change_text_scale(-self.TEXT_SCALE_STEP)
+        return "break"
+
+    def _reset_text_scale(self, _event: tk.Event | None = None) -> str | None:
+        self._set_text_scale(self.DEFAULT_TEXT_SCALE)
+        return "break"
+
+    def _pick_font_family(
+        self, *choices: str, base_named_font: str = "TkDefaultFont"
+    ) -> str | None:
         try:
             available = set(tkfont.families(self.root))
         except tk.TclError:
@@ -203,7 +381,13 @@ class CPGeneratorApp:
         for choice in choices:
             if choice in available:
                 return choice
-        return "TkDefaultFont"
+        try:
+            fallback_family = tkfont.nametofont(base_named_font).actual("family")
+        except tk.TclError:
+            fallback_family = None
+        if fallback_family and fallback_family in available:
+            return fallback_family
+        return None
 
     def _configure_style(self) -> None:
         colors = self.COLORS
@@ -216,6 +400,21 @@ class CPGeneratorApp:
         style.configure("App.TFrame", background=colors["shell"])
         style.configure("Panel.TFrame", background=colors["panel"])
         style.configure("Stage.TFrame", background=colors["panel_alt"])
+        style.configure(".", font=self.fonts["body"])
+        style.configure("TLabel", font=self.fonts["body"])
+        style.configure("TButton", font=self.fonts["button"])
+        style.configure("TCheckbutton", font=self.fonts["body"])
+        style.configure("TEntry", font=self.fonts["body"])
+        style.configure("TCombobox", font=self.fonts["body"])
+        style.configure(
+            "Preview.Horizontal.TScale",
+            background=colors["card"],
+            troughcolor=colors["wash_one"],
+            bordercolor=colors["border"],
+            lightcolor=colors["accent"],
+            darkcolor=colors["accent_deep"],
+            sliderlength=self._scale_px(30),
+        )
 
         style.configure(
             "Hero.TLabel",
@@ -274,7 +473,7 @@ class CPGeneratorApp:
 
         style.configure(
             "Modern.TEntry",
-            padding=(12, 8),
+            padding=(self._scale_px(15), self._scale_px(10)),
             foreground=colors["ink"],
             fieldbackground=colors["card"],
             background=colors["card"],
@@ -291,14 +490,14 @@ class CPGeneratorApp:
 
         style.configure(
             "Modern.TCombobox",
-            padding=(10, 7),
+            padding=(self._scale_px(13), self._scale_px(9)),
             foreground=colors["ink"],
             fieldbackground=colors["card"],
             background=colors["card"],
             bordercolor=colors["border"],
             lightcolor=colors["border"],
             darkcolor=colors["border"],
-            arrowsize=14,
+            arrowsize=self._scale_px(18),
         )
         style.map(
             "Modern.TCombobox",
@@ -312,7 +511,7 @@ class CPGeneratorApp:
 
         style.configure(
             "Primary.TButton",
-            padding=(13, 8),
+            padding=(self._scale_px(16), self._scale_px(10)),
             font=self.fonts["button"],
             foreground=colors["accent_text"],
             background=colors["accent"],
@@ -332,7 +531,7 @@ class CPGeneratorApp:
 
         style.configure(
             "Secondary.TButton",
-            padding=(13, 8),
+            padding=(self._scale_px(16), self._scale_px(10)),
             font=self.fonts["button"],
             foreground=colors["secondary_text"],
             background=colors["secondary"],
@@ -352,7 +551,7 @@ class CPGeneratorApp:
 
         style.configure(
             "Ink.TButton",
-            padding=(13, 8),
+            padding=(self._scale_px(16), self._scale_px(10)),
             font=self.fonts["button"],
             foreground=colors["paper"],
             background=colors["ink_button"],
@@ -372,7 +571,7 @@ class CPGeneratorApp:
 
         style.configure(
             "Neutral.TButton",
-            padding=(13, 8),
+            padding=(self._scale_px(16), self._scale_px(10)),
             font=self.fonts["button"],
             foreground=colors["neutral_button_text"],
             background=colors["neutral_button"],
@@ -395,12 +594,38 @@ class CPGeneratorApp:
             background=colors["card"],
             foreground=colors["ink"],
             font=self.fonts["body"],
+            padding=(self._scale_px(2), self._scale_px(4)),
         )
         style.map(
             "Card.TCheckbutton",
             background=[("active", colors["card"]), ("disabled", colors["card"])],
             foreground=[("disabled", colors["ink_soft"]), ("!disabled", colors["ink"])],
         )
+        style.configure(
+            "Compact.Neutral.TButton",
+            padding=(8, 5),
+            font=self.fonts["small"],
+            foreground=colors["neutral_button_text"],
+            background=colors["neutral_button"],
+            borderwidth=1,
+            bordercolor=colors["border_strong"],
+            focusthickness=0,
+            relief="flat",
+        )
+        style.map(
+            "Compact.Neutral.TButton",
+            background=[
+                ("disabled", colors["neutral_button_disabled"]),
+                ("pressed", colors["neutral_button_hover"]),
+                ("active", colors["neutral_button_hover"]),
+            ],
+        )
+        self.root.option_add("*Font", self.fonts["body"])
+        self.root.option_add("*Label.Font", self.fonts["body"])
+        self.root.option_add("*Button.Font", self.fonts["button"])
+        self.root.option_add("*Checkbutton.Font", self.fonts["body"])
+        self.root.option_add("*Entry.Font", self.fonts["body"])
+        self.root.option_add("*TCombobox*Listbox.font", self.fonts["body"])
 
     def _build_layout(self) -> None:
         self.root.columnconfigure(0, weight=1)
@@ -408,26 +633,77 @@ class CPGeneratorApp:
 
         container = ttk.Frame(self.root, style="App.TFrame", padding=16)
         container.grid(row=0, column=0, sticky="nsew")
-        container.columnconfigure(0, weight=0, minsize=330)
-        container.columnconfigure(1, weight=1)
+        container.columnconfigure(0, weight=1)
         container.rowconfigure(0, weight=1)
 
-        self.sidebar = ttk.Frame(
-            container, style="Panel.TFrame", padding=(16, 16, 16, 16), width=330
+        self.split_view = tk.PanedWindow(
+            container,
+            orient=tk.HORIZONTAL,
+            sashwidth=10,
+            sashrelief=tk.RAISED,
+            showhandle=False,
+            opaqueresize=True,
+            bd=0,
+            bg=self.COLORS["shell"],
         )
-        self.sidebar.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
-        self.sidebar.grid_propagate(False)
+        self.split_view.grid(row=0, column=0, sticky="nsew")
+        self.split_view.bind("<ButtonRelease-1>", self._remember_sidebar_split, add="+")
+        self.split_view.bind("<Configure>", self._on_split_configure, add="+")
+
+        self.sidebar_shell = ttk.Frame(
+            self.split_view,
+            style="Panel.TFrame",
+            width=self.sidebar_width,
+        )
+        self.sidebar_shell.grid_propagate(False)
+        self.sidebar_shell.columnconfigure(0, weight=1)
+        self.sidebar_shell.rowconfigure(0, weight=1)
+
+        self.sidebar_canvas = tk.Canvas(
+            self.sidebar_shell,
+            bg=self.COLORS["panel"],
+            bd=0,
+            highlightthickness=0,
+            yscrollincrement=max(self._scale_px(18), 18),
+        )
+        self.sidebar_canvas.grid(row=0, column=0, sticky="nsew")
+
+        self.sidebar_scrollbar = ttk.Scrollbar(
+            self.sidebar_shell, orient="vertical", command=self.sidebar_canvas.yview
+        )
+        self.sidebar_scrollbar.grid(row=0, column=1, sticky="ns", padx=(8, 0))
+        self.sidebar_canvas.configure(yscrollcommand=self.sidebar_scrollbar.set)
+
+        self.sidebar = ttk.Frame(
+            self.sidebar_canvas,
+            style="Panel.TFrame",
+            padding=(16, 16, 16, 16),
+        )
+        self.sidebar_window_id = self.sidebar_canvas.create_window(
+            (0, 0), window=self.sidebar, anchor="nw"
+        )
+        self.sidebar.bind("<Configure>", self._queue_sidebar_scrollregion_sync, add="+")
+        self.sidebar_canvas.bind("<Configure>", self._queue_sidebar_scrollregion_sync, add="+")
         self.sidebar.columnconfigure(0, weight=1)
 
         self.stage = ttk.Frame(
-            container, style="Stage.TFrame", padding=(14, 12, 14, 14)
+            self.split_view,
+            style="Stage.TFrame",
+            padding=(14, 12, 14, 14),
         )
-        self.stage.grid(row=0, column=1, sticky="nsew")
         self.stage.columnconfigure(0, weight=1)
         self.stage.rowconfigure(1, weight=1)
 
+        self.split_view.add(
+            self.sidebar_shell,
+            minsize=self.MIN_SIDEBAR_WIDTH,
+            width=self.sidebar_width,
+        )
+        self.split_view.add(self.stage, minsize=self.MIN_STAGE_WIDTH)
+
         self._build_sidebar()
         self._build_stage()
+        self._queue_apply_sidebar_split()
 
     def _build_sidebar(self) -> None:
         accent_strip = tk.Frame(self.sidebar, bg=self.COLORS["accent"], height=6)
@@ -459,8 +735,121 @@ class CPGeneratorApp:
         )
         brand_copy.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self._register_wrap_label(
-            brand_copy, brand, padding=8, minimum=220, maximum=280
+            brand_copy, brand, padding=8, minimum=220
         )
+
+        view_row = tk.Frame(brand, bg=self.COLORS["panel"])
+        view_row.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        for column in range(4):
+            view_row.columnconfigure(column, weight=1)
+
+        tk.Label(
+            view_row,
+            text="Text size",
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["ink_soft"],
+            font=self.fonts["small"],
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        self.text_scale_down_button = ttk.Button(
+            view_row,
+            text="A-",
+            command=self._decrease_text_scale,
+            style="Compact.Neutral.TButton",
+        )
+        self.text_scale_down_button.grid(
+            row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 6)
+        )
+
+        text_scale_label = tk.Label(
+            view_row,
+            textvariable=self.text_scale_var,
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["ink"],
+            font=self.fonts["small"],
+            anchor="center",
+        )
+        text_scale_label.grid(
+            row=1, column=1, sticky="ew", padx=(0, 6), pady=(6, 0)
+        )
+
+        self.text_scale_up_button = ttk.Button(
+            view_row,
+            text="A+",
+            command=self._increase_text_scale,
+            style="Compact.Neutral.TButton",
+        )
+        self.text_scale_up_button.grid(
+            row=1, column=2, sticky="ew", pady=(6, 0), padx=(0, 6)
+        )
+
+        text_scale_reset = ttk.Button(
+            view_row,
+            text="Reset",
+            command=self._reset_text_scale,
+            style="Compact.Neutral.TButton",
+        )
+        text_scale_reset.grid(row=1, column=3, sticky="ew", pady=(6, 0))
+        self._interactive_widgets.extend(
+            [
+                self.text_scale_down_button,
+                self.text_scale_up_button,
+                text_scale_reset,
+            ]
+        )
+
+        split_row = tk.Frame(brand, bg=self.COLORS["panel"])
+        split_row.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        for column in range(3):
+            split_row.columnconfigure(column, weight=1)
+
+        tk.Label(
+            split_row,
+            text="Panel split",
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["ink_soft"],
+            font=self.fonts["small"],
+            anchor="w",
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
+
+        split_left = ttk.Button(
+            split_row,
+            text="Wider left",
+            command=lambda: self._nudge_split(self.SPLIT_STEP),
+            style="Compact.Neutral.TButton",
+        )
+        split_left.grid(row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 6))
+
+        split_reset = ttk.Button(
+            split_row,
+            text="Reset split",
+            command=self._reset_split,
+            style="Compact.Neutral.TButton",
+        )
+        split_reset.grid(row=1, column=1, sticky="ew", padx=(0, 6), pady=(6, 0))
+
+        split_right = ttk.Button(
+            split_row,
+            text="Wider right",
+            command=lambda: self._nudge_split(-self.SPLIT_STEP),
+            style="Compact.Neutral.TButton",
+        )
+        split_right.grid(row=1, column=2, sticky="ew", pady=(6, 0))
+
+        split_hint = tk.Label(
+            split_row,
+            text="You can also drag the divider.",
+            bg=self.COLORS["panel"],
+            fg=self.COLORS["ink_soft"],
+            font=self.fonts["small"],
+            anchor="w",
+        )
+        split_hint.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self._register_wrap_label(
+            split_hint, split_row, padding=8, minimum=220
+        )
+        self._interactive_widgets.extend([split_left, split_reset, split_right])
 
         setup_card = self._make_card(self.sidebar)
         setup_card.grid(row=2, column=0, sticky="ew", pady=(0, 14))
@@ -508,8 +897,101 @@ class CPGeneratorApp:
         self.labels_toggle.grid(row=4, column=0, sticky="w", padx=16, pady=(0, 12))
         self._interactive_widgets.append(self.labels_toggle)
 
+        automation_card = self._make_card(self.sidebar)
+        automation_card.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        automation_card.columnconfigure(0, weight=1)
+        automation_card.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            automation_card, text="Automation", style="CardTitle.TLabel"
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 8))
+
+        ttk.Label(
+            automation_card,
+            text="Search tries",
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=0, sticky="w", padx=16)
+        ttk.Label(
+            automation_card,
+            text="Local rounds",
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=1, sticky="w", padx=(8, 16))
+
+        validate_cmd = (self.root.register(self._validate_point_count), "%P")
+        self.auto_full_entry = ttk.Entry(
+            automation_card,
+            textvariable=self.auto_full_attempt_limit_var,
+            style="Modern.TEntry",
+            justify="center",
+            width=6,
+            validate="key",
+            validatecommand=validate_cmd,
+            font=self.fonts["body"],
+        )
+        self.auto_full_entry.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 10))
+        self.auto_local_entry = ttk.Entry(
+            automation_card,
+            textvariable=self.auto_local_round_limit_var,
+            style="Modern.TEntry",
+            justify="center",
+            width=6,
+            validate="key",
+            validatecommand=validate_cmd,
+            font=self.fonts["body"],
+        )
+        self.auto_local_entry.grid(
+            row=2, column=1, sticky="ew", padx=(8, 16), pady=(6, 10)
+        )
+
+        auto_full_button = ttk.Button(
+            automation_card,
+            text="Auto All Green",
+            command=self.auto_find_all_green,
+            style="Primary.TButton",
+        )
+        auto_full_button.grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
+
+        auto_local_button = ttk.Button(
+            automation_card,
+            text="Auto Local Green",
+            command=self.auto_optimize_local,
+            style="Ink.TButton",
+        )
+        auto_local_button.grid(row=4, column=0, columnspan=2, sticky="ew", padx=16, pady=(0, 8))
+
+        optimize_metrics = ttk.Label(
+            automation_card,
+            textvariable=self.optimize_metrics_var,
+            style="CardBody.TLabel",
+            justify="left",
+        )
+        optimize_metrics.grid(row=5, column=0, columnspan=2, sticky="ew", padx=16)
+        self._register_wrap_label(
+            optimize_metrics, automation_card, padding=38, minimum=220
+        )
+
+        automation_note = ttk.Label(
+            automation_card,
+            textvariable=self.automation_note_var,
+            style="CardMuted.TLabel",
+            justify="left",
+        )
+        automation_note.grid(row=6, column=0, columnspan=2, sticky="ew", padx=16, pady=(6, 12))
+        self._register_wrap_label(
+            automation_note, automation_card, padding=38, minimum=220
+        )
+
+        self._interactive_widgets.extend(
+            [
+                self.auto_full_entry,
+                self.auto_local_entry,
+                auto_full_button,
+                auto_local_button,
+            ]
+        )
+
         actions_card = self._make_card(self.sidebar)
-        actions_card.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        actions_card.grid(row=4, column=0, sticky="ew", pady=(0, 14))
         actions_card.columnconfigure(0, weight=1)
 
         ttk.Label(actions_card, text="Actions", style="CardTitle.TLabel").grid(
@@ -576,7 +1058,7 @@ class CPGeneratorApp:
         )
 
         stats_card = self._make_card(self.sidebar)
-        stats_card.grid(row=4, column=0, sticky="ew", pady=(0, 14))
+        stats_card.grid(row=5, column=0, sticky="ew", pady=(0, 14))
         stats_card.columnconfigure(0, weight=1)
         stats_card.columnconfigure(1, weight=1)
         stats_card.columnconfigure(2, weight=1)
@@ -610,10 +1092,41 @@ class CPGeneratorApp:
             accent=self.COLORS["ink_button"],
         )
 
+        diagnostics_card = self._make_card(self.sidebar)
+        diagnostics_card.grid(row=6, column=0, sticky="ew", pady=(0, 14))
+        diagnostics_card.columnconfigure(0, weight=1)
+        diagnostics_card.columnconfigure(1, weight=1)
+
+        ttk.Label(diagnostics_card, text="Diagnostics", style="CardTitle.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(12, 8)
+        )
+        self.local_diag_badge = self._create_diagnostic_badge(
+            diagnostics_card, row=1, column=0, textvariable=self.local_diag_var
+        )
+        self.assignment_diag_badge = self._create_diagnostic_badge(
+            diagnostics_card, row=1, column=1, textvariable=self.assignment_diag_var
+        )
+        self.global_diag_badge = self._create_diagnostic_badge(
+            diagnostics_card, row=2, column=0, textvariable=self.global_diag_var
+        )
+        self.preview_diag_badge = self._create_diagnostic_badge(
+            diagnostics_card, row=2, column=1, textvariable=self.preview_diag_var
+        )
+        diagnostics_detail = ttk.Label(
+            diagnostics_card,
+            textvariable=self.diagnostic_detail_var,
+            style="CardMuted.TLabel",
+            justify="left",
+        )
+        diagnostics_detail.grid(row=3, column=0, columnspan=2, sticky="ew", padx=16, pady=(4, 12))
+        self._register_wrap_label(
+            diagnostics_detail, diagnostics_card, padding=38, minimum=220
+        )
+
         status_card = self._make_card(self.sidebar, background=self.COLORS["status_bg"])
-        status_card.grid(row=5, column=0, sticky="nsew")
+        status_card.grid(row=7, column=0, sticky="nsew")
         status_card.columnconfigure(0, weight=1)
-        self.sidebar.rowconfigure(5, weight=1)
+        self.sidebar.rowconfigure(7, weight=1)
 
         session_title = tk.Label(
             status_card,
@@ -678,7 +1191,7 @@ class CPGeneratorApp:
         )
         stage_copy.grid(row=1, column=0, sticky="ew", pady=(6, 0), padx=(0, 12))
         self._register_wrap_label(
-            stage_copy, header, padding=280, minimum=240, maximum=760
+            stage_copy, header, padding=240, minimum=220
         )
 
         legend = tk.Frame(header, bg=self.COLORS["panel_alt"])
@@ -731,7 +1244,7 @@ class CPGeneratorApp:
             cursor="crosshair",
         )
         self.canvas.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-        self.canvas.bind("<Configure>", lambda _event: self._redraw_sheet())
+        self.canvas.bind("<Configure>", self._queue_sheet_redraw)
 
         sheet_caption = ttk.Label(
             sheet_card,
@@ -774,7 +1287,7 @@ class CPGeneratorApp:
             cursor="hand2",
         )
         self.preview_canvas.grid(row=0, column=0, sticky="nsew", padx=1, pady=1)
-        self.preview_canvas.bind("<Configure>", lambda _event: self._redraw_preview())
+        self.preview_canvas.bind("<Configure>", self._queue_preview_redraw)
         self.preview_canvas.bind("<ButtonPress-1>", self._start_preview_drag)
         self.preview_canvas.bind("<B1-Motion>", self._drag_preview)
         self.preview_canvas.bind("<ButtonRelease-1>", self._end_preview_drag)
@@ -809,6 +1322,7 @@ class CPGeneratorApp:
             to=1.0,
             variable=self.preview_progress_var,
             command=self._on_preview_progress,
+            style="Preview.Horizontal.TScale",
         )
         self.preview_slider.grid(row=0, column=2, sticky="ew", padx=(0, 10))
 
@@ -952,12 +1466,179 @@ class CPGeneratorApp:
         ).grid(row=0, column=1)
         return item
 
+    def _create_diagnostic_badge(
+        self,
+        parent: tk.Widget,
+        row: int,
+        column: int,
+        textvariable: tk.StringVar,
+    ) -> tk.Label:
+        label = tk.Label(
+            parent,
+            textvariable=textvariable,
+            bg=self.BADGE_COLORS["neutral"][0],
+            fg=self.BADGE_COLORS["neutral"][1],
+            font=self.fonts["badge"],
+            padx=10,
+            pady=6,
+            anchor="w",
+            justify="left",
+        )
+        label.grid(
+            row=row,
+            column=column,
+            sticky="ew",
+            padx=(16 if column == 0 else 8, 16),
+            pady=(0, 8),
+        )
+        self._register_wrap_label(label, parent, padding=38, minimum=120)
+        return label
+
+    def _diagnostic_badge_tone(self, status: str) -> str:
+        if status == cp.STATUS_PASS:
+            return "success"
+        if status == cp.STATUS_FAIL:
+            return "danger"
+        if status == cp.STATUS_WARNING:
+            return "warning"
+        if status == cp.STATUS_UNKNOWN:
+            return "working"
+        return "neutral"
+
+    def _apply_diagnostic_badge(self, label: tk.Label, status: str) -> None:
+        badge_bg, badge_fg = self.BADGE_COLORS.get(
+            self._diagnostic_badge_tone(status), self.BADGE_COLORS["neutral"]
+        )
+        label.configure(bg=badge_bg, fg=badge_fg)
+
+    def _sync_sidebar_scrollregion(
+        self, _event: tk.Event | None = None
+    ) -> None:
+        if self._closing or not hasattr(self, "sidebar_canvas"):
+            return
+        self._sidebar_scroll_job = None
+        bbox = self.sidebar_canvas.bbox("all")
+        if bbox is not None:
+            self.sidebar_canvas.configure(scrollregion=bbox)
+        if hasattr(self, "sidebar_window_id"):
+            self.sidebar_canvas.itemconfigure(
+                self.sidebar_window_id,
+                width=max(self.sidebar_canvas.winfo_width(), 1),
+            )
+
+    def _queue_sidebar_scrollregion_sync(
+        self, _event: tk.Event | None = None
+    ) -> None:
+        if self._closing:
+            return
+        if self._sidebar_scroll_job is not None:
+            self.root.after_cancel(self._sidebar_scroll_job)
+        self._sidebar_scroll_job = self.root.after_idle(self._sync_sidebar_scrollregion)
+
+    def _widget_inside_sidebar(self, widget: tk.Widget | None) -> bool:
+        current = widget
+        while current is not None:
+            if current == self.sidebar or current == self.sidebar_canvas:
+                return True
+            parent_name = current.winfo_parent()
+            if not parent_name:
+                break
+            try:
+                current = current.nametowidget(parent_name)
+            except KeyError:
+                break
+        return False
+
+    def _on_global_mousewheel(self, event: tk.Event) -> str | None:
+        if self._closing or not hasattr(self, "sidebar_canvas"):
+            return None
+        target = self.root.winfo_containing(event.x_root, event.y_root)
+        if not self._widget_inside_sidebar(target):
+            return None
+        if hasattr(event, "delta") and event.delta:
+            direction = -1 if event.delta > 0 else 1
+        elif getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        else:
+            return None
+        self.sidebar_canvas.yview_scroll(direction, "units")
+        return "break"
+
+    def _clamp_sidebar_width(self, width: int) -> int:
+        if not hasattr(self, "split_view"):
+            return max(self.MIN_SIDEBAR_WIDTH, width)
+        realized_width = self.split_view.winfo_width()
+        if realized_width <= 1:
+            return max(self.MIN_SIDEBAR_WIDTH, int(width))
+        total = max(realized_width, self.MIN_SIDEBAR_WIDTH + self.MIN_STAGE_WIDTH)
+        max_sidebar = max(self.MIN_SIDEBAR_WIDTH, total - self.MIN_STAGE_WIDTH)
+        return max(self.MIN_SIDEBAR_WIDTH, min(int(width), max_sidebar))
+
+    def _apply_sidebar_split(self, sidebar_width: int | None = None) -> None:
+        self._split_apply_job = None
+        if not hasattr(self, "split_view"):
+            return
+        if sidebar_width is not None:
+            self.sidebar_width = int(sidebar_width)
+        clamped = self._clamp_sidebar_width(self.sidebar_width)
+        self.sidebar_width = clamped
+        try:
+            self.split_view.sash_place(0, clamped, 0)
+        except tk.TclError:
+            return
+        try:
+            self.sidebar_shell.configure(width=clamped)
+        except tk.TclError:
+            pass
+        self._queue_sidebar_scrollregion_sync()
+
+    def _queue_apply_sidebar_split(
+        self, _event: tk.Event | None = None
+    ) -> None:
+        if self._closing or not hasattr(self, "split_view"):
+            return
+        if self._split_apply_job is not None:
+            self.root.after_cancel(self._split_apply_job)
+        self._split_apply_job = self.root.after_idle(self._apply_sidebar_split)
+
+    def _remember_sidebar_split(self, _event: tk.Event | None = None) -> None:
+        if not hasattr(self, "split_view"):
+            return
+        try:
+            x, _y = self.split_view.sash_coord(0)
+        except tk.TclError:
+            return
+        self.sidebar_width = self._clamp_sidebar_width(int(x))
+
+    def _on_split_configure(self, _event: tk.Event | None = None) -> None:
+        self._queue_apply_sidebar_split()
+
+    def _nudge_split(self, delta: int) -> None:
+        self._apply_sidebar_split(self.sidebar_width + delta)
+
+    def _reset_split(self) -> None:
+        self._apply_sidebar_split(self.DEFAULT_SIDEBAR_WIDTH)
+
     def _handle_close(self) -> None:
         self._closing = True
         self._stop_preview_animation()
         if self._wrap_refresh_job is not None:
             self.root.after_cancel(self._wrap_refresh_job)
             self._wrap_refresh_job = None
+        if self._sidebar_scroll_job is not None:
+            self.root.after_cancel(self._sidebar_scroll_job)
+            self._sidebar_scroll_job = None
+        if self._sheet_redraw_job is not None:
+            self.root.after_cancel(self._sheet_redraw_job)
+            self._sheet_redraw_job = None
+        if self._preview_redraw_job is not None:
+            self.root.after_cancel(self._preview_redraw_job)
+            self._preview_redraw_job = None
+        if self._split_apply_job is not None:
+            self.root.after_cancel(self._split_apply_job)
+            self._split_apply_job = None
         self.root.destroy()
 
     def _register_wrap_label(
@@ -969,6 +1650,10 @@ class CPGeneratorApp:
         maximum: int | None = None,
     ) -> None:
         self._wrap_labels.append((widget, parent, padding, minimum, maximum))
+        parent_id = str(parent)
+        if parent_id not in self._wrap_bound_parents:
+            parent.bind("<Configure>", self._queue_wrap_refresh, add="+")
+            self._wrap_bound_parents.add(parent_id)
 
     def _queue_wrap_refresh(self, _event: tk.Event | None = None) -> None:
         if self._closing:
@@ -992,6 +1677,20 @@ class CPGeneratorApp:
                 widget.configure(wraplength=width)
             except tk.TclError:
                 continue
+
+    def _queue_sheet_redraw(self, _event: tk.Event | None = None) -> None:
+        if self._closing:
+            return
+        if self._sheet_redraw_job is not None:
+            self.root.after_cancel(self._sheet_redraw_job)
+        self._sheet_redraw_job = self.root.after_idle(self._redraw_sheet)
+
+    def _queue_preview_redraw(self, _event: tk.Event | None = None) -> None:
+        if self._closing:
+            return
+        if self._preview_redraw_job is not None:
+            self.root.after_cancel(self._preview_redraw_job)
+        self._preview_redraw_job = self.root.after_idle(self._redraw_preview)
 
     def _refresh_preview_summary(self, *_args) -> None:
         caption = self.preview_caption_var.get().strip()
@@ -1035,6 +1734,218 @@ class CPGeneratorApp:
         self.vertex_count_var.set(str(len(self.pattern.vertices)))
         self.fold_count_var.set(str(len(self.pattern.folds)))
         self.interior_count_var.set(str(len(self.pattern.none_edge_vertices())))
+
+    def _refresh_diagnostics(self) -> None:
+        if not self.pattern.vertices:
+            self.diagnostic_report = None
+            self.fold_simulation_diagnostic = None
+            self.local_diag_var.set("Local: not_run")
+            self.assignment_diag_var.set("Assignment: not_run")
+            self.global_diag_var.set("Global: not_run")
+            self.preview_diag_var.set("Preview: not_run")
+            self.diagnostic_detail_var.set(
+                "Diagnostics will appear after the sheet is analyzed."
+            )
+            if hasattr(self, "local_diag_badge"):
+                for widget in (
+                    self.local_diag_badge,
+                    self.assignment_diag_badge,
+                    self.global_diag_badge,
+                    self.preview_diag_badge,
+                ):
+                    self._apply_diagnostic_badge(widget, cp.STATUS_NOT_RUN)
+            return
+
+        self.diagnostic_report = self.pattern.analyze_pattern()
+        local_status = self.diagnostic_report.local_status
+        assignment_status = self.diagnostic_report.fold_assignment_status
+        global_status = self.diagnostic_report.global_status
+        preview_status = cp.STATUS_NOT_RUN
+
+        detail = (
+            self.diagnostic_report.summary[0]
+            if self.diagnostic_report.summary
+            else self.diagnostic_report.global_diagnostic.message
+        )
+
+        if self.fold_simulation_diagnostic is not None:
+            preview_status = self.fold_simulation_diagnostic.status
+            if global_status != cp.STATUS_FAIL:
+                global_status = self.fold_simulation_diagnostic.status
+            detail = self.fold_simulation_diagnostic.message or detail
+
+        self.diagnostic_report = cp.PatternDiagnosticReport(
+            local_status=local_status,
+            global_status=global_status,
+            preview_status=preview_status,
+            fold_assignment_status=assignment_status,
+            vertex_diagnostics=self.diagnostic_report.vertex_diagnostics,
+            fold_assignment=self.diagnostic_report.fold_assignment,
+            global_diagnostic=cp.GlobalDiagnostic(
+                status=global_status,
+                used_exact_faces=(
+                    self.fold_simulation_diagnostic is not None
+                    and self.fold_simulation_diagnostic.preview_mode == "exact"
+                ),
+                used_reference_pattern=(
+                    self.fold_simulation_diagnostic.used_reference_pattern
+                    if self.fold_simulation_diagnostic is not None
+                    else self.diagnostic_report.global_diagnostic.used_reference_pattern
+                ),
+                uses_provisional_signs=(
+                    self.fold_simulation_diagnostic.uses_provisional_signs
+                    if self.fold_simulation_diagnostic is not None
+                    else self.diagnostic_report.global_diagnostic.uses_provisional_signs
+                ),
+                uses_approximate_cycles=(
+                    self.fold_simulation_diagnostic.uses_approximate_cycles
+                    if self.fold_simulation_diagnostic is not None
+                    else self.diagnostic_report.global_diagnostic.uses_approximate_cycles
+                ),
+                cycle_drift=(
+                    self.fold_simulation_diagnostic.cycle_drift
+                    if self.fold_simulation_diagnostic is not None
+                    else self.diagnostic_report.global_diagnostic.cycle_drift
+                ),
+                crossing_fold_pairs=self.diagnostic_report.global_diagnostic.crossing_fold_pairs,
+                face_count=(
+                    self.fold_simulation_diagnostic.face_count
+                    if self.fold_simulation_diagnostic is not None
+                    else self.diagnostic_report.global_diagnostic.face_count
+                ),
+                message=detail,
+            ),
+            summary=(detail,),
+        )
+
+        self.local_diag_var.set(f"Local: {local_status}")
+        self.assignment_diag_var.set(f"Assignment: {assignment_status}")
+        self.global_diag_var.set(f"Global: {global_status}")
+        self.preview_diag_var.set(f"Preview: {preview_status}")
+        self.diagnostic_detail_var.set(detail)
+
+        if hasattr(self, "local_diag_badge"):
+            self._apply_diagnostic_badge(self.local_diag_badge, local_status)
+            self._apply_diagnostic_badge(self.assignment_diag_badge, assignment_status)
+            self._apply_diagnostic_badge(self.global_diag_badge, global_status)
+            self._apply_diagnostic_badge(self.preview_diag_badge, preview_status)
+
+    def _parse_iteration_limit(self, var: tk.StringVar, label: str) -> int | None:
+        raw = var.get().strip()
+        if not raw:
+            self._set_status(
+                "Input Needed",
+                f"Enter a limit for {label.lower()}.",
+                "Use a positive whole number so automation knows when to stop.",
+                tone="warning",
+            )
+            return None
+        value = int(raw)
+        if value <= 0:
+            self._set_status(
+                "Input Needed",
+                f"{label} must be positive.",
+                "Use a positive whole number so automation knows when to stop.",
+                tone="warning",
+            )
+            return None
+        return value
+
+    def _set_optimize_metrics(
+        self,
+        *,
+        loss: float | None = None,
+        iterations: int | None = None,
+        rounds: int | None = None,
+        attempts: int | None = None,
+        prefix: str = "Optimizer",
+    ) -> None:
+        parts: list[str] = []
+        if loss is not None and math.isfinite(loss):
+            parts.append(f"loss {loss:.3e}")
+        if iterations is not None:
+            parts.append(f"{iterations} iter")
+        if rounds is not None:
+            parts.append(f"{rounds} rounds")
+        if attempts is not None:
+            parts.append(f"{attempts} tries")
+        if not parts:
+            self.optimize_metrics_var.set("Optimizer: loss -, iterations -, rounds -")
+            return
+        self.optimize_metrics_var.set(f"{prefix}: " + " · ".join(parts))
+
+    def _all_boxes_green(self) -> bool:
+        if self.diagnostic_report is None:
+            return False
+        return all(
+            status == cp.STATUS_PASS
+            for status in (
+                self.diagnostic_report.local_status,
+                self.diagnostic_report.fold_assignment_status,
+                self.diagnostic_report.global_status,
+                self.diagnostic_report.preview_status,
+            )
+        )
+
+    def _optimize_pattern_until_local_green(
+        self,
+        max_rounds: int,
+        *,
+        redraw_each_round: bool,
+    ) -> dict[str, object]:
+        self._refresh_diagnostics()
+        if self.diagnostic_report is not None and self.diagnostic_report.local_status == cp.STATUS_PASS:
+            self._set_optimize_metrics(prefix="Optimizer")
+            return {
+                "green": True,
+                "rounds": 0,
+                "iterations": 0,
+                "loss": None,
+                "result": None,
+            }
+
+        rounds = 0
+        total_iterations = 0
+        last_loss: float | None = None
+        last_result = None
+        while rounds < max_rounds:
+            rounds += 1
+            last_result = self.pattern.optimize()
+            total_iterations += int(getattr(last_result, "nit", 0) or 0)
+            loss = getattr(last_result, "fun", None)
+            last_loss = float(loss) if loss is not None else None
+            self._clear_fold_assignments()
+            self.fold_assignment_ready = False
+            self.preview_model = None
+            self.fold_simulation_diagnostic = None
+            self._update_stats()
+            self._refresh_diagnostics()
+            self._set_optimize_metrics(
+                loss=last_loss,
+                iterations=total_iterations,
+                rounds=rounds,
+                prefix="Optimizer",
+            )
+            self.automation_note_var.set(
+                f"Local auto-optimize round {rounds}/{max_rounds} complete."
+            )
+            if redraw_each_round:
+                self._redraw_sheet()
+                self.root.update_idletasks()
+            if self.diagnostic_report is not None and self.diagnostic_report.local_status == cp.STATUS_PASS:
+                break
+
+        green = (
+            self.diagnostic_report is not None
+            and self.diagnostic_report.local_status == cp.STATUS_PASS
+        )
+        return {
+            "green": green,
+            "rounds": rounds,
+            "iterations": total_iterations,
+            "loss": last_loss,
+            "result": last_result,
+        }
 
     def _parse_point_count(self) -> int | None:
         raw = self.point_count_var.get().strip()
@@ -1132,9 +2043,8 @@ class CPGeneratorApp:
         if not self.pattern.folds:
             return
         candidate = self._clone_pattern(self.pattern)
-        try:
-            fold_sim.build_folded_figure(candidate)
-        except fold_sim.FoldSimulationError:
+        model, diagnostic = fold_sim.try_build_folded_figure(candidate)
+        if model is None or diagnostic.status == cp.STATUS_FAIL:
             return
         self.preview_reference_pattern = candidate
 
@@ -1142,15 +2052,32 @@ class CPGeneratorApp:
         self._stop_preview_animation()
         self.preview_progress_var.set(0.0)
         self._update_preview_progress_text()
+        self.fold_simulation_diagnostic = None
 
         if self.sample_key == box_head_sample.BOX_HEAD_KEY:
             self.preview_model = fold_sim.build_box_head_figure(self.pattern)
+            self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
+                status=cp.STATUS_WARNING,
+                face_count=getattr(self.preview_model, "face_count", None),
+                uses_provisional_signs=getattr(
+                    self.preview_model, "uses_provisional_signs", False
+                ),
+                uses_approximate_cycles=getattr(
+                    self.preview_model, "uses_approximate_cycles", False
+                ),
+                cycle_drift=getattr(self.preview_model, "cycle_drift", None),
+                crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
+                message="The Box Head sample uses an authored preview path rather than a plain exact-fold certificate.",
+                preview_mode="scripted",
+                used_reference_pattern=False,
+            )
             self.preview_caption_var.set(
                 "The Box Head sample is folding from the authored crease pattern."
             )
             self.preview_detail_var.set(
                 "The animation now follows the existing fold solver first, then settles into a Box Head-specific shaped finish so the sample stays seamless and still reads like the reference character."
             )
+            self._refresh_diagnostics()
             self._sync_preview_controls()
             self._redraw_preview()
             if autoplay:
@@ -1159,6 +2086,7 @@ class CPGeneratorApp:
 
         if not self.pattern.vertices:
             self.preview_model = None
+            self._refresh_diagnostics()
             self.preview_caption_var.set(
                 "Generate a crease pattern to open the folded figure."
             )
@@ -1171,6 +2099,7 @@ class CPGeneratorApp:
 
         if not self.pattern.folds:
             self.preview_model = None
+            self._refresh_diagnostics()
             self.preview_caption_var.set("This sheet has no interior folds to animate.")
             self.preview_detail_var.set(
                 "Generate a denser pattern if you want a folded figure with internal structure."
@@ -1181,6 +2110,7 @@ class CPGeneratorApp:
 
         if not self.fold_assignment_ready:
             self.preview_model = None
+            self._refresh_diagnostics()
             self.preview_caption_var.set(
                 "Assign mountain and valley folds to unlock the folded figure."
             )
@@ -1207,20 +2137,35 @@ class CPGeneratorApp:
                 candidates.append(("mesh", "reference", fallback))
 
         for solver_name, source_name, candidate in candidates:
-            try:
-                if solver_name == "exact":
-                    model = fold_sim.build_folded_figure(candidate)
-                else:
+            if solver_name == "exact":
+                model, diagnostic = fold_sim.try_build_folded_figure(candidate)
+                if model is None:
+                    failure_messages.append(diagnostic.message)
+                    continue
+            else:
+                try:
                     model = fold_sim.build_approximate_folded_figure_with_mode(
                         candidate, spatial_mode=False
                     )
-            except fold_sim.FoldSimulationError as exc:
-                failure_messages.append(str(exc))
-                continue
+                except fold_sim.FoldSimulationError as exc:
+                    failure_messages.append(str(exc))
+                    continue
+                diagnostic = fold_sim.FoldSimulationDiagnostic(
+                    status=cp.STATUS_WARNING,
+                    face_count=getattr(model, "face_count", None),
+                    uses_provisional_signs=model.uses_provisional_signs,
+                    uses_approximate_cycles=model.uses_approximate_cycles,
+                    cycle_drift=model.cycle_drift,
+                    crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
+                    message="Only the mesh-based preview path succeeded for this sheet.",
+                    preview_mode="mesh",
+                    used_reference_pattern=False,
+                )
 
             self.preview_model = model
             if source_name == "current" and solver_name == "exact":
                 self.preview_reference_pattern = self._clone_pattern(candidate)
+                self.fold_simulation_diagnostic = diagnostic
                 notes: list[str] = []
                 if model.uses_provisional_signs:
                     notes.append(
@@ -1244,6 +2189,17 @@ class CPGeneratorApp:
                         "Press play to fold, or drag directly on the model to inspect the final layered state from any angle."
                     )
             elif source_name == "reference" and solver_name == "exact":
+                self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
+                    status=cp.STATUS_WARNING,
+                    face_count=diagnostic.face_count,
+                    uses_provisional_signs=diagnostic.uses_provisional_signs,
+                    uses_approximate_cycles=diagnostic.uses_approximate_cycles,
+                    cycle_drift=diagnostic.cycle_drift,
+                    crossing_fold_pairs=diagnostic.crossing_fold_pairs,
+                    message="Exact preview succeeded only from the last stable reference geometry.",
+                    preview_mode="exact",
+                    used_reference_pattern=True,
+                )
                 self.preview_caption_var.set(
                     "The folded figure is ready from the last stable planar geometry."
                 )
@@ -1256,6 +2212,7 @@ class CPGeneratorApp:
                     detail += f" Cycle drift remained at about {model.cycle_drift:.3f}, so the stack is approximate."
                 self.preview_detail_var.set(detail)
             elif source_name == "current":
+                self.fold_simulation_diagnostic = diagnostic
                 self.preview_caption_var.set(
                     "The folded figure is ready with a mesh-based 3D fallback."
                 )
@@ -1266,6 +2223,17 @@ class CPGeneratorApp:
                     )
                 self.preview_detail_var.set(detail)
             else:
+                self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
+                    status=cp.STATUS_WARNING,
+                    face_count=diagnostic.face_count,
+                    uses_provisional_signs=diagnostic.uses_provisional_signs,
+                    uses_approximate_cycles=diagnostic.uses_approximate_cycles,
+                    cycle_drift=diagnostic.cycle_drift,
+                    crossing_fold_pairs=diagnostic.crossing_fold_pairs,
+                    message="Only a mesh fallback from the last stable reference geometry succeeded.",
+                    preview_mode="mesh",
+                    used_reference_pattern=True,
+                )
                 self.preview_caption_var.set(
                     "The folded figure is ready from a stable mesh fallback."
                 )
@@ -1276,6 +2244,7 @@ class CPGeneratorApp:
                     )
                 self.preview_detail_var.set(detail)
 
+            self._refresh_diagnostics()
             self._sync_preview_controls()
             self._redraw_preview()
             if autoplay:
@@ -1283,6 +2252,21 @@ class CPGeneratorApp:
             return
 
         self.preview_model = None
+        self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
+            status=cp.STATUS_FAIL,
+            face_count=None,
+            uses_provisional_signs=False,
+            uses_approximate_cycles=False,
+            cycle_drift=None,
+            crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
+            message=(
+                failure_messages[-1]
+                if failure_messages
+                else "The folded figure could not be constructed."
+            ),
+            preview_mode="none",
+            used_reference_pattern=False,
+        )
         failure = (
             failure_messages[-1]
             if failure_messages
@@ -1290,6 +2274,7 @@ class CPGeneratorApp:
         )
         self.preview_caption_var.set("The folded figure is unavailable for this sheet.")
         self.preview_detail_var.set(failure)
+        self._refresh_diagnostics()
         self._sync_preview_controls()
         self._redraw_preview()
 
@@ -1449,25 +2434,29 @@ class CPGeneratorApp:
             self.preview_reference_pattern = self._clone_pattern(self.pattern)
             self.fold_assignment_ready = False
             self.preview_model = None
+            self.fold_simulation_diagnostic = None
             self._reset_preview_camera()
             self._update_stats()
+            self._set_optimize_metrics()
+            self.automation_note_var.set(
+                "Automation can now refine this sheet or search for an all-green result."
+            )
+            detail = (
+                "Optimize the geometry before assigning folds for the best chance of a valid mountain and valley pattern."
+            )
             self.sheet_caption_var.set(
                 "Resize the window to inspect the sheet at any scale. Optimize next if you want cleaner flat-fold geometry."
-            )
-            detail = "Optimize the geometry before assigning folds for the best chance of a valid mountain and valley pattern."
-            title = (
-                f"Generated a crease pattern with {point_count} random interior points."
             )
             if initial:
                 detail = "Use the controls on the left to regenerate, refine, fold, and export this sheet."
             self._set_status(
                 "Fresh",
-                title,
+                f"Generated a crease pattern with {point_count} random interior points.",
                 detail,
                 tone="neutral",
             )
             self._rebuild_preview()
-            self.redraw()
+            self._redraw_sheet()
 
         self._run_action("Generating a new crease pattern...", action)
 
@@ -1495,10 +2484,21 @@ class CPGeneratorApp:
             self._clear_fold_assignments()
             self.fold_assignment_ready = False
             self.preview_model = None
+            self.fold_simulation_diagnostic = None
             self._refresh_preview_reference()
             self._update_stats()
+            loss = getattr(res, "fun", None)
+            self._set_optimize_metrics(
+                loss=float(loss) if loss is not None else None,
+                iterations=int(getattr(res, "nit", 0) or 0),
+                rounds=1,
+            )
+            self.automation_note_var.set(
+                "Single-pass optimization finished. Re-run or use automation to keep refining the sheet."
+            )
+            self._refresh_diagnostics()
             self._rebuild_preview()
-            self.redraw()
+            self._redraw_sheet()
             if res.success:
                 self.sheet_caption_var.set(
                     "Optimization refreshed the geometry. Reassign folds next to recolor the sheet and reopen the folded figure."
@@ -1521,6 +2521,163 @@ class CPGeneratorApp:
                 )
 
         self._run_action("Optimizing crease geometry...", action)
+
+    def auto_optimize_local(self) -> None:
+        if not self.pattern.vertices:
+            self._set_status(
+                "No Pattern",
+                "Generate a crease pattern before running local automation.",
+                "Auto local optimization keeps refining the current sheet until the local badge turns green or the round limit is reached.",
+                tone="warning",
+            )
+            return
+
+        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
+            self._set_status(
+                "Locked",
+                "The Box Head sample already uses authored geometry.",
+                "Automation is skipped so the published sample remains unchanged.",
+                tone="neutral",
+            )
+            return
+
+        max_rounds = self._parse_iteration_limit(
+            self.auto_local_round_limit_var, "Local rounds"
+        )
+        if max_rounds is None:
+            return
+
+        def action() -> None:
+            result = self._optimize_pattern_until_local_green(
+                max_rounds, redraw_each_round=True
+            )
+            self._refresh_preview_reference()
+            self._rebuild_preview()
+            self._redraw_sheet()
+            if result["green"]:
+                self.sheet_caption_var.set(
+                    "Automation kept refining the geometry until the local checks turned green."
+                )
+                self._set_status(
+                    "Local Green",
+                    "Continuous optimization reached a locally valid geometry.",
+                    "The local badge is now green. Assign folds next if you want to test the global and preview stages.",
+                    tone="success",
+                )
+                self.automation_note_var.set(
+                    f"Local criteria passed after {result['rounds']} optimization rounds."
+                )
+            else:
+                self.sheet_caption_var.set(
+                    "Automation improved the sheet but stopped before the local checks turned fully green."
+                )
+                self._set_status(
+                    "Needs Work",
+                    "Continuous optimization hit the round limit before the local badge turned green.",
+                    "Increase the local-round limit, optimize again, or regenerate a different sheet.",
+                    tone="warning",
+                )
+                self.automation_note_var.set(
+                    f"Stopped after {result['rounds']} optimization rounds without a green local badge."
+                )
+
+        self._run_action("Auto-optimizing until the local badge turns green...", action)
+
+    def auto_find_all_green(self) -> None:
+        point_count = self._parse_point_count()
+        if point_count is None:
+            return
+
+        max_attempts = self._parse_iteration_limit(
+            self.auto_full_attempt_limit_var, "Search tries"
+        )
+        if max_attempts is None:
+            return
+
+        max_local_rounds = self._parse_iteration_limit(
+            self.auto_local_round_limit_var, "Local rounds"
+        )
+        if max_local_rounds is None:
+            return
+
+        def action() -> None:
+            found = False
+            last_assignment_message = "No search attempt was executed."
+            for attempt in range(1, max_attempts + 1):
+                self.pattern = self._build_pattern(point_count)
+                self.sample_key = None
+                self.preview_reference_pattern = self._clone_pattern(self.pattern)
+                self.fold_assignment_ready = False
+                self.preview_model = None
+                self.fold_simulation_diagnostic = None
+                self._reset_preview_camera()
+                self._update_stats()
+                self._refresh_diagnostics()
+                self._set_status(
+                    "Working",
+                    f"Search attempt {attempt}/{max_attempts}.",
+                    "Generating, optimizing, assigning folds, and checking whether every diagnostics badge can turn green.",
+                    tone="working",
+                )
+                self.automation_note_var.set(
+                    f"Attempt {attempt}/{max_attempts}: generated a fresh random sheet."
+                )
+                self._redraw_sheet()
+                self.root.update_idletasks()
+
+                optimize_result = self._optimize_pattern_until_local_green(
+                    max_local_rounds, redraw_each_round=False
+                )
+                self._set_optimize_metrics(
+                    loss=optimize_result["loss"],
+                    iterations=int(optimize_result["iterations"]),
+                    rounds=int(optimize_result["rounds"]),
+                    attempts=attempt,
+                    prefix="Search",
+                )
+
+                assign_result = self.pattern.assign_mv()
+                last_assignment_message = assign_result.message
+                self.fold_assignment_ready = assign_result.success
+                self._refresh_preview_reference()
+                self._update_stats()
+                self._rebuild_preview()
+                self._redraw_sheet()
+                self.root.update_idletasks()
+
+                if self._all_boxes_green():
+                    found = True
+                    self.sheet_caption_var.set(
+                        "Automation found a sheet whose local, assignment, global, and preview badges are all green."
+                    )
+                    self._set_status(
+                        "All Green",
+                        f"Search succeeded on attempt {attempt}.",
+                        "The current sheet is the first one in this run that satisfied all four diagnostics badges.",
+                        tone="success",
+                    )
+                    self.automation_note_var.set(
+                        f"All four badges turned green on attempt {attempt} after {optimize_result['rounds']} local optimization rounds."
+                    )
+                    break
+
+                self.automation_note_var.set(
+                    f"Attempt {attempt}/{max_attempts} finished: local {self.local_diag_var.get().split(': ', 1)[1]}, assignment {self.assignment_diag_var.get().split(': ', 1)[1]}, global {self.global_diag_var.get().split(': ', 1)[1]}, preview {self.preview_diag_var.get().split(': ', 1)[1]}."
+                )
+
+            if not found:
+                self.sheet_caption_var.set(
+                    "Automation stopped after the search limit without finding a fully green sheet."
+                )
+                self._set_status(
+                    "Search Stopped",
+                    "The generate-optimize-assign search hit its try limit.",
+                    "The current sheet is the last attempt. Increase the search-try limit or adjust the point count to keep searching.",
+                    tone="warning",
+                )
+                self.automation_note_var.set(last_assignment_message)
+
+        self._run_action("Searching for a sheet with all diagnostics badges green...", action)
 
     def assign_mv(self) -> None:
         if not self.pattern.vertices:
@@ -1546,12 +2703,12 @@ class CPGeneratorApp:
             self._refresh_preview_reference()
             self._update_stats()
             self._rebuild_preview(autoplay=True)
-            self.redraw()
+            self._redraw_sheet()
             return
 
         def action() -> None:
             res = self.pattern.assign_mv()
-            if res == []:
+            if not res.success:
                 self._clear_fold_assignments()
                 self.fold_assignment_ready = False
                 self.sheet_caption_var.set(
@@ -1559,7 +2716,7 @@ class CPGeneratorApp:
                 )
                 self._set_status(
                     "No Solution",
-                    "No valid mountain and valley assignment was found for this geometry.",
+                    res.message,
                     "Try optimizing again or generate a different crease pattern.",
                     tone="danger",
                 )
@@ -1568,7 +2725,7 @@ class CPGeneratorApp:
                 self.sheet_caption_var.set(
                     "Terracotta mountains and blue valleys are now assigned across the sheet."
                 )
-                detail = "The folded figure on the right can now animate into its layered final state."
+                detail = res.message
                 self._set_status(
                     "Assigned",
                     "Mountain and valley folds were assigned successfully.",
@@ -1578,7 +2735,7 @@ class CPGeneratorApp:
             self._refresh_preview_reference()
             self._update_stats()
             self._rebuild_preview(autoplay=self.fold_assignment_ready)
-            self.redraw()
+            self._redraw_sheet()
 
         self._run_action("Assigning mountain and valley folds...", action)
 
@@ -1613,7 +2770,7 @@ class CPGeneratorApp:
             self.pattern.export_svg(str(export_path))
             png_path = export_path.with_suffix(".png")
             self._update_stats()
-            self.redraw()
+            self._redraw_sheet()
             self.sheet_caption_var.set(
                 "Vector lines are saved to SVG, and a matching PNG preview is written beside it."
             )
@@ -1690,6 +2847,10 @@ class CPGeneratorApp:
         def action() -> None:
             payload = json.loads(load_path.read_text(encoding="utf-8"))
             self._restore_session_data(payload)
+            self._set_optimize_metrics()
+            self.automation_note_var.set(
+                "Loaded a session from disk. Automation can continue from the restored geometry."
+            )
             self._set_status(
                 "Loaded",
                 f"Loaded {load_path.name}.",
@@ -1706,9 +2867,14 @@ class CPGeneratorApp:
             self.preview_reference_pattern = self._clone_pattern(self.pattern)
             self.fold_assignment_ready = True
             self.preview_model = None
+            self.fold_simulation_diagnostic = None
             self.point_count_var.set("16")
             self._reset_preview_camera()
             self._update_stats()
+            self._set_optimize_metrics()
+            self.automation_note_var.set(
+                "The authored sample is ready for inspection; generation automation is disabled for it."
+            )
             self.sheet_caption_var.set(
                 "This is an authored 16x16 Box Head crease pattern sample with fixed mountain and valley assignments."
             )
@@ -1719,7 +2885,7 @@ class CPGeneratorApp:
                 tone="success",
             )
             self._rebuild_preview(autoplay=True)
-            self.redraw()
+            self._redraw_sheet()
 
         self._run_action("Loading Box Head sample...", action)
 
@@ -1729,6 +2895,8 @@ class CPGeneratorApp:
             "version": 1,
             "sample_key": self.sample_key,
             "point_count": self.point_count_var.get(),
+            "text_scale": self.user_text_scale,
+            "sidebar_width": self.sidebar_width,
             "show_labels": bool(self.show_labels_var.get()),
             "preview_loop": bool(self.preview_loop_var.get()),
             "preview_edge_families": bool(self.preview_edge_families_var.get()),
@@ -1761,6 +2929,13 @@ class CPGeneratorApp:
             else self._clone_pattern(self.pattern)
         )
         self.point_count_var.set(str(payload.get("point_count", DEFAULT_POINTS)))
+        text_scale = payload.get("text_scale")
+        if isinstance(text_scale, (int, float)):
+            self._set_text_scale(float(text_scale))
+        sidebar_width = payload.get("sidebar_width")
+        if isinstance(sidebar_width, (int, float)):
+            self.sidebar_width = int(sidebar_width)
+            self._queue_apply_sidebar_split()
         self.show_labels_var.set(bool(payload.get("show_labels", False)))
         self.preview_loop_var.set(bool(payload.get("preview_loop", True)))
         self.preview_edge_families_var.set(
@@ -1780,13 +2955,14 @@ class CPGeneratorApp:
             self.fold_assignment_ready = False
 
         self._rebuild_preview()
-        self.redraw()
+        self._redraw_sheet()
 
     def redraw(self) -> None:
         self._redraw_sheet()
         self._redraw_preview()
 
     def _redraw_sheet(self) -> None:
+        self._sheet_redraw_job = None
         canvas = self.canvas
         canvas.delete("all")
 
@@ -1903,6 +3079,7 @@ class CPGeneratorApp:
                 self._draw_vertex_label(index, vertex, x, y, side)
 
     def _redraw_preview(self) -> None:
+        self._preview_redraw_job = None
         canvas = self.preview_canvas
         canvas.delete("all")
 

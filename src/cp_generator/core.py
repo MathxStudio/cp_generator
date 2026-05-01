@@ -1,4 +1,5 @@
 import random
+from dataclasses import dataclass
 from scipy.spatial import Delaunay
 import numpy as np
 import math
@@ -6,6 +7,101 @@ from scipy.optimize import minimize
 from itertools import product
 import svgwrite
 from cairosvg import svg2png
+
+
+STATUS_PASS = "pass"
+STATUS_FAIL = "fail"
+STATUS_WARNING = "warning"
+STATUS_UNKNOWN = "unknown"
+STATUS_NOT_RUN = "not_run"
+
+
+@dataclass(frozen=True)
+class VertexLocalDiagnostic:
+    vertex_index: int
+    on_edge: bool
+    degree: int
+    even_degree_ok: bool
+    kawasaki_ok: bool
+    kawasaki_even_sum: float | None
+    kawasaki_odd_sum: float | None
+    kawasaki_error: float | None
+    maekawa_ok: bool | None
+    maekawa_mountains: int | None
+    maekawa_valleys: int | None
+    maekawa_balance: int | None
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class FoldAssignmentDiagnostic:
+    assigned_fold_count: int
+    unassigned_fold_count: int
+    maekawa_failures: tuple[int, ...]
+    underdetermined: bool
+
+
+@dataclass(frozen=True)
+class GlobalDiagnostic:
+    status: str
+    used_exact_faces: bool
+    used_reference_pattern: bool
+    uses_provisional_signs: bool
+    uses_approximate_cycles: bool
+    cycle_drift: float | None
+    crossing_fold_pairs: tuple[tuple[int, int], ...] = ()
+    face_count: int | None = None
+    message: str = ""
+
+
+@dataclass(frozen=True)
+class PatternDiagnosticReport:
+    local_status: str
+    global_status: str
+    preview_status: str
+    fold_assignment_status: str
+    vertex_diagnostics: tuple[VertexLocalDiagnostic, ...]
+    fold_assignment: FoldAssignmentDiagnostic
+    global_diagnostic: GlobalDiagnostic
+    summary: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AssignmentSearchResult:
+    success: bool
+    message: str
+    assigned_fold_count: int
+    unassigned_fold_count: int
+    group_count: int
+
+
+def _orientation(a, b, c):
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _point_on_segment(a, b, p, epsilon):
+    return (
+        min(a[0], b[0]) - epsilon <= p[0] <= max(a[0], b[0]) + epsilon
+        and min(a[1], b[1]) - epsilon <= p[1] <= max(a[1], b[1]) + epsilon
+    )
+
+
+def _segments_intersect(a0, a1, b0, b1, epsilon):
+    o1 = _orientation(a0, a1, b0)
+    o2 = _orientation(a0, a1, b1)
+    o3 = _orientation(b0, b1, a0)
+    o4 = _orientation(b0, b1, a1)
+
+    if abs(o1) <= epsilon and _point_on_segment(a0, a1, b0, epsilon):
+        return True
+    if abs(o2) <= epsilon and _point_on_segment(a0, a1, b1, epsilon):
+        return True
+    if abs(o3) <= epsilon and _point_on_segment(b0, b1, a0, epsilon):
+        return True
+    if abs(o4) <= epsilon and _point_on_segment(b0, b1, a1, epsilon):
+        return True
+
+    return (o1 > epsilon) != (o2 > epsilon) and (o3 > epsilon) != (o4 > epsilon)
 
 
 class Vertex():
@@ -433,7 +529,15 @@ class CreasePattern():
 
         # minimize
         myconstraints = self.generate_constraints()
-        res = minimize(self.objective(on_edge), x0, constraints = myconstraints, method='SLSQP', options={'disp': True})
+        # Keep the optimizer quiet in the terminal; the GUI surfaces the
+        # relevant loss and iteration diagnostics directly.
+        res = minimize(
+            self.objective(on_edge),
+            x0,
+            constraints=myconstraints,
+            method='SLSQP',
+            options={'disp': False},
+        )
         # update the coordinates of the vertices
         for i in range(len(self.vertices)):
             self.vertices[i].x = res.x[2*i]
@@ -499,30 +603,234 @@ class CreasePattern():
 
         return pattern
 
+    def vertex_index_map(self):
+        return {vertex: index for index, vertex in enumerate(self.vertices)}
+
+    def fold_index_map(self):
+        vertex_index = self.vertex_index_map()
+        ordered = sorted(
+            self.folds,
+            key=lambda fold: tuple(sorted((vertex_index[fold.v1], vertex_index[fold.v2]))),
+        )
+        return {fold: index for index, fold in enumerate(ordered)}
+
+    def maekawa_counts(self, v):
+        mountains = 0
+        valleys = 0
+        assigned = False
+        for f in v.adj:
+            if f.type == 0:
+                mountains += 1
+                assigned = True
+            elif f.type == 1:
+                valleys += 1
+                assigned = True
+        if not assigned:
+            return None
+        return mountains, valleys
+
+    def maekawa_balance(self, v):
+        counts = self.maekawa_counts(v)
+        if counts is None:
+            return None
+        mountains, valleys = counts
+        return mountains - valleys
+
+    def kawasaki_sums(self, v):
+        if self.on_edge(v):
+            return None
+        angles = self.adjacent_angles(v)
+        if len(angles) % 2 == 1:
+            return None
+        return sum(angles[::2]), sum(angles[1::2])
+
+    def kawasaki_error(self, v, tolerance=1e-6):
+        if self.on_edge(v):
+            return 0.0
+        sums = self.kawasaki_sums(v)
+        if sums is None:
+            return float("inf")
+        even_sum, odd_sum = sums
+        return max(abs(even_sum - math.pi), abs(odd_sum - math.pi))
+
+    def crossing_fold_pairs(self, epsilon=None):
+        if epsilon is None:
+            epsilon = max(1e-6 * float(self.side or 1.0), 1e-6)
+        index_map = self.fold_index_map()
+        crossings = []
+        ordered_folds = sorted(self.folds, key=lambda fold: index_map[fold])
+        for index, first in enumerate(ordered_folds):
+            a0 = (float(first.v1.x), float(first.v1.y))
+            a1 = (float(first.v2.x), float(first.v2.y))
+            for second in ordered_folds[index + 1 :]:
+                if len({first.v1, first.v2, second.v1, second.v2}) < 4:
+                    continue
+                b0 = (float(second.v1.x), float(second.v1.y))
+                b1 = (float(second.v2.x), float(second.v2.y))
+                if _segments_intersect(a0, a1, b0, b1, epsilon):
+                    crossings.append((index_map[first], index_map[second]))
+        return tuple(crossings)
+
+    def analyze_local(self, tolerance=1e-6):
+        diagnostics = []
+        vertex_index = self.vertex_index_map()
+        for vertex in self.vertices:
+            on_edge = self.on_edge(vertex)
+            even_degree_ok = vertex.d % 2 == 0
+            kawasaki_even_sum = None
+            kawasaki_odd_sum = None
+            kawasaki_error = None
+            kawasaki_ok = True if on_edge else False
+            if not on_edge:
+                sums = self.kawasaki_sums(vertex)
+                if sums is not None:
+                    kawasaki_even_sum, kawasaki_odd_sum = sums
+                    kawasaki_error = max(
+                        abs(kawasaki_even_sum - math.pi),
+                        abs(kawasaki_odd_sum - math.pi),
+                    )
+                    kawasaki_ok = kawasaki_error <= tolerance
+
+            maekawa_counts = self.maekawa_counts(vertex)
+            maekawa_ok = None
+            maekawa_mountains = None
+            maekawa_valleys = None
+            maekawa_balance = None
+            if maekawa_counts is not None:
+                maekawa_mountains, maekawa_valleys = maekawa_counts
+                maekawa_balance = maekawa_mountains - maekawa_valleys
+                maekawa_ok = on_edge or abs(maekawa_balance) == 2
+
+            messages = []
+            if not on_edge and not even_degree_ok:
+                messages.append("Interior vertex has odd degree.")
+            if not on_edge and not kawasaki_ok:
+                messages.append("Kawasaki balance failed.")
+            if maekawa_ok is False:
+                messages.append("Assigned folds violate Maekawa.")
+
+            diagnostics.append(
+                VertexLocalDiagnostic(
+                    vertex_index=vertex_index[vertex],
+                    on_edge=on_edge,
+                    degree=vertex.d,
+                    even_degree_ok=even_degree_ok,
+                    kawasaki_ok=kawasaki_ok,
+                    kawasaki_even_sum=kawasaki_even_sum,
+                    kawasaki_odd_sum=kawasaki_odd_sum,
+                    kawasaki_error=kawasaki_error,
+                    maekawa_ok=maekawa_ok,
+                    maekawa_mountains=maekawa_mountains,
+                    maekawa_valleys=maekawa_valleys,
+                    maekawa_balance=maekawa_balance,
+                    message=" ".join(messages),
+                )
+            )
+        return tuple(diagnostics)
+
+    def analyze_assignments(self):
+        assigned_fold_count = sum(1 for fold in self.folds if fold.type in (0, 1))
+        unassigned_fold_count = sum(1 for fold in self.folds if fold.type == -1)
+        maekawa_failures = []
+        for diagnostic in self.analyze_local():
+            if diagnostic.on_edge:
+                continue
+            if diagnostic.maekawa_ok is False:
+                maekawa_failures.append(diagnostic.vertex_index)
+        return FoldAssignmentDiagnostic(
+            assigned_fold_count=assigned_fold_count,
+            unassigned_fold_count=unassigned_fold_count,
+            maekawa_failures=tuple(maekawa_failures),
+            underdetermined=unassigned_fold_count > 0,
+        )
+
+    def analyze_pattern(self, tolerance=1e-6):
+        vertex_diagnostics = self.analyze_local(tolerance=tolerance)
+        assignment = self.analyze_assignments()
+        interior_vertices = [item for item in vertex_diagnostics if not item.on_edge]
+
+        local_failures = [
+            item
+            for item in interior_vertices
+            if (not item.even_degree_ok) or (not item.kawasaki_ok)
+        ]
+        local_status = STATUS_PASS if not local_failures else STATUS_FAIL
+
+        if assignment.maekawa_failures:
+            fold_assignment_status = STATUS_FAIL
+        elif assignment.assigned_fold_count == 0:
+            fold_assignment_status = STATUS_NOT_RUN
+        elif assignment.underdetermined:
+            fold_assignment_status = STATUS_WARNING
+        else:
+            fold_assignment_status = STATUS_PASS
+
+        crossing_pairs = self.crossing_fold_pairs()
+        if crossing_pairs:
+            global_status = STATUS_FAIL
+            global_message = "Crossing folds were detected."
+        elif not self.folds:
+            global_status = STATUS_NOT_RUN
+            global_message = "No interior folds are available for global analysis."
+        elif fold_assignment_status == STATUS_NOT_RUN:
+            global_status = STATUS_UNKNOWN
+            global_message = "Assign folds before claiming global flat-foldability."
+        else:
+            global_status = STATUS_UNKNOWN
+            global_message = "Only local conditions are certified at this stage."
+
+        summary = []
+        if local_failures:
+            first = local_failures[0]
+            summary.append(f"Vertex {first.vertex_index} fails a local condition.")
+        elif assignment.maekawa_failures:
+            summary.append(
+                f"Assigned folds violate Maekawa at vertex {assignment.maekawa_failures[0]}."
+            )
+        elif crossing_pairs:
+            first_a, first_b = crossing_pairs[0]
+            summary.append(f"Folds {first_a} and {first_b} cross geometrically.")
+        elif not self.folds:
+            summary.append("No interior folds are present yet.")
+        elif assignment.underdetermined:
+            summary.append("Some folds are still unassigned.")
+        else:
+            summary.append("Local diagnostics look consistent.")
+
+        return PatternDiagnosticReport(
+            local_status=local_status,
+            global_status=global_status,
+            preview_status=STATUS_NOT_RUN,
+            fold_assignment_status=fold_assignment_status,
+            vertex_diagnostics=vertex_diagnostics,
+            fold_assignment=assignment,
+            global_diagnostic=GlobalDiagnostic(
+                status=global_status,
+                used_exact_faces=False,
+                used_reference_pattern=False,
+                uses_provisional_signs=False,
+                uses_approximate_cycles=False,
+                cycle_drift=None,
+                crossing_fold_pairs=crossing_pairs,
+                face_count=None,
+                message=global_message,
+            ),
+            summary=tuple(summary),
+        )
+
     def maekawa(self, v):
         # check if v satisfies Maekawa's theorem, that the number of mountain folds is equal to the number of valley folds +- 2
         # first, get the number of mountain and valley folds
-        mn = 0
-        vl = 0
-        for f in v.adj:
-            if f.type == 0:
-                mn += 1
-            elif f.type == 1:
-                vl += 1
-        if mn == vl + 2 or mn == vl - 2:
-            return True
-        return False
+        balance = self.maekawa_balance(v)
+        if balance is None:
+            return False
+        return balance in (-2, 2)
 
     def kawasaki(self, v, tolerance=1e-6):
         # check Kawasaki's theorem at a single interior vertex
         if self.on_edge(v):
             return True
-        angles = self.adjacent_angles(v)
-        if len(angles) % 2 == 1:
-            return False
-        even_sum = sum(angles[::2])
-        odd_sum = sum(angles[1::2])
-        return abs(even_sum - math.pi) <= tolerance and abs(odd_sum - math.pi) <= tolerance
+        return self.kawasaki_error(v, tolerance=tolerance) <= tolerance
 
     def locally_flat_foldable(self, tolerance=1e-6):
         # local flat-foldability needs even degree and Kawasaki at every interior vertex
@@ -688,8 +996,14 @@ class CreasePattern():
 
         # first verify that the crease pattern has even degree
         if not self.even_degree():
-            print("Crease pattern does not have even degree")
-            return []
+            self._clear_assignments()
+            return AssignmentSearchResult(
+                success=False,
+                message="Interior vertices must have even degree before assigning folds.",
+                assigned_fold_count=0,
+                unassigned_fold_count=len(self.folds),
+                group_count=0,
+            )
 
         # start from a neutral state so reruns do not inherit stale assignments
         for fold in self.folds:
@@ -883,14 +1197,34 @@ class CreasePattern():
 
         if best_choice is not None:
             apply_choice(best_choice)
-            print("Assignment Found")
-            return groupings
+            assigned_fold_count = sum(1 for fold in self.folds if fold.type in (0, 1))
+            unassigned_fold_count = sum(1 for fold in self.folds if fold.type == -1)
+            message = "A locally admissible mountain/valley assignment was found."
+            if unassigned_fold_count > 0:
+                message = (
+                    "A locally admissible assignment was found, but some folds remain underdetermined."
+                )
+            return AssignmentSearchResult(
+                success=True,
+                message=message,
+                assigned_fold_count=assigned_fold_count,
+                unassigned_fold_count=unassigned_fold_count,
+                group_count=len(groupings),
+            )
 
         # if we get here, no choice worked
+        self._clear_assignments()
+        return AssignmentSearchResult(
+            success=False,
+            message="No locally admissible mountain/valley assignment was found for this geometry.",
+            assigned_fold_count=0,
+            unassigned_fold_count=len(self.folds),
+            group_count=len(groupings),
+        )
+
+    def _clear_assignments(self):
         for fold in self.folds:
             fold.type = -1
-        print("No choice worked")
-        return []
 
     def get_svg(self, length):
         # return the svg of the crease pattern

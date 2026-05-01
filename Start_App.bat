@@ -9,7 +9,7 @@ if not exist uv.exe (
 
 :: 2. Run the application (uv will auto-fetch Windows Python and your dependencies)
 echo Starting application...
-.\uv.exe run main.py
+.\uv.exe run cp-generator
 
 :: 3. Keep the window open only if the app crashes
 if %ERRORLEVEL% neq 0 pause

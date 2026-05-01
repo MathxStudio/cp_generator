@@ -4,7 +4,7 @@ from __future__ import annotations
 # Designed for the East Bay Origami Convention 2024.
 # Source: https://www.obb.design/crease-patterns/box-head---16x16-grid
 
-import cp
+from .. import core as cp
 
 
 BOX_HEAD_TITLE = "Box Head - 16x16 Grid"

@@ -1,11 +1,7 @@
-# Report
+The Beamer presentation for the project lives in this directory.
 
-The main report source is `crease_pattern_methods.tex`.
-
-If you have `latexmk` installed, build it with:
+Build locally with:
 
 ```bash
 latexmk -xelatex -interaction=nonstopmode crease_pattern_methods.tex
 ```
-
-The output PDF will be written beside the `.tex` file.

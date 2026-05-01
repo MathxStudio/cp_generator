@@ -2,9 +2,9 @@
 
 A desktop application for generating, optimizing, and animating origami crease patterns. Starting from a random point set, it builds a Delaunay candidate graph, enforces local flat-fold conditions (Kawasaki and Maekawa), assigns mountain/valley folds, and renders a live animated 3D fold preview — all inside a single Tkinter window.
 
-![Example output](result.jpg)
+![Example output](assets/images/result.jpg)
 
-> **Credits:** `box_head.png` is reconstructed from **"Box Head – 16×16 Grid"** by
+> **Credits:** `assets/images/box_head.png` is reconstructed from **"Box Head – 16×16 Grid"** by
 > **Boice** (Origami by Boice), designed for the East Bay Origami Convention 2024.
 > [Source](https://www.obb.design/crease-patterns/box-head---16x16-grid)
 
@@ -33,17 +33,19 @@ A desktop application for generating, optimizing, and animating origami crease p
 curl -LsSf https://astral.sh/uv/install.sh | sh   # macOS / Linux
 # or: powershell -c "irm https://astral.sh/uv/install.ps1 | iex"  # Windows
 
-# clone and run (uv resolves Python 3.14 + deps automatically)
+# clone and run from the project root (uv resolves Python 3.14 + deps automatically)
 git clone https://github.com/MathxStudio/cp_generator.git
 cd cp_generator
-uv run main.py
+uv run cp-generator
+# or: uv run python -m cp_generator
 ```
 
 **Manual Python install (Python ≥ 3.14 required):**
 
 ```bash
-pip install numpy scipy svgwrite cairosvg
-python main.py
+pip install .
+cp-generator
+# or: python -m cp_generator
 ```
 
 > **Linux note:** `cairosvg` requires the system `libcairo2` library.
@@ -153,7 +155,7 @@ a pre-built bundle. Double-click it from the project folder:
 
 1. If `uv.exe` is not present, it downloads the standalone uv binary
    automatically.
-2. It calls `uv run main.py`, which fetches Python 3.14 and all dependencies
+2. It calls `uv run cp-generator`, which fetches Python 3.14 and all dependencies
    on first run (requires an internet connection the first time only).
 3. On subsequent runs it starts immediately from the local cache.
 
@@ -165,6 +167,7 @@ a pre-built bundle. Double-click it from the project folder:
 - Geometry optimization with Kawasaki-style alternating-angle constraints (SLSQP)
 - Exhaustive mountain/valley assignment search with Maekawa filtering
 - Bern–Hayes-style local reduction to minimize the combinatorial search space
+- Diagnostics that separate local admissibility, fold assignment, global consistency, and exact-preview status
 - Live animated 3D fold preview with kinematic face rotation
 - SVG and PNG export
 - Session save/load (`.cpfold.json`)
@@ -189,10 +192,23 @@ rebuilds the folded preview.
 
 ```
 cp_generator/
-├── main.py                  # entrypoint
-├── cp_gen.py                # Tkinter GUI and user interactions
-├── cp.py                    # crease-pattern graph, optimization, MV assignment, export
-├── fold_sim.py              # 3D fold preview pipeline
+├── src/
+│   └── cp_generator/
+│       ├── __main__.py      # package entrypoint
+│       ├── app.py           # Tkinter GUI and user interactions
+│       ├── core.py          # crease-pattern graph, optimization, MV assignment, export
+│       ├── fold_sim.py      # 3D fold preview pipeline
+│       └── samples/
+│           └── box_head.py  # authored Box Head sample pattern
+├── assets/
+│   ├── README.md
+│   └── images/
+│       ├── box_head.png
+│       └── result.jpg
+├── examples/
+│   ├── README.md
+│   └── sessions/
+│       └── fold_session.cpfold.json
 ├── pyproject.toml           # project metadata and dependency declarations
 ├── uv.lock                  # exact locked dependency versions
 ├── requirements.txt         # pip-compatible dependency list
@@ -212,8 +228,9 @@ cp_generator/
 ## Report
 
 `report/crease_pattern_methods.tex` is a concise Beamer presentation covering
-the four algorithms: graph construction, parity repair and Kawasaki
-optimization, mountain/valley assignment, and 3D animation.
+graph construction, parity repair and Kawasaki optimization, mountain/valley
+assignment, exact/current-geometry preview certification, and the current
+global-consistency diagnostics.
 
 Build the PDF locally (requires a TeX distribution with XeLaTeX and
 `beamer`/`metropolis`):

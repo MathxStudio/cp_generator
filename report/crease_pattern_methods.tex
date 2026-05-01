@@ -5,6 +5,7 @@
 \usetheme{metropolis}
 \usefonttheme{professionalfonts}
 \setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{theorems}[numbered]
 
 % ── Palette ────────────────────────────────────────────────────────────────
 \definecolor{cpnavy}{HTML}{1A3047}   % deep navy — frametitle, headings
@@ -30,10 +31,12 @@
 \setbeamerfont{frametitle}{size=\large,series=\bfseries}
 
 \newcommand{\RR}{\mathbb{R}}
+\newcommand{\CP}{\mathcal{C}}
+\newcommand{\eps}{\varepsilon}
 \newcommand{\norm}[1]{\left\lVert #1\right\rVert}
 
 \title{\textbf{CP Generator}}
-\subtitle{Algorithmic Methods for Origami Crease Patterns}
+\subtitle{Generation, Diagnostics, and Animation of Origami Crease Patterns}
 \author{Allan Pan}
 \date{\today}
 
@@ -45,19 +48,20 @@
 \begin{frame}{What this project is}
 \begin{columns}[T,onlytextwidth]
 \column{0.52\textwidth}
-A desktop app that generates, optimizes, and animates a flat-foldable crease
-pattern on a square sheet — entirely from scratch.
+A desktop app that generates, diagnoses, and animates origami crease patterns
+on a square sheet — entirely from scratch.
 \medskip
 
-\textcolor{cpmid}{\small \texttt{cp.py} · \texttt{cp\_gen.py} · \texttt{fold\_sim.py}}
+\textcolor{cpmid}{\small \texttt{src/cp\_generator/core.py} · \texttt{src/cp\_generator/app.py} · \texttt{src/cp\_generator/fold\_sim.py}}
 \medskip
 
-\begin{block}{Four linked algorithms}
+\begin{block}{Five linked algorithms}
 \begin{enumerate}\small
   \item Build a planar candidate graph.
   \item Repair parity \& optimize for Kawasaki.
   \item Assign mountains/valleys.
   \item Extract faces \& animate the fold.
+  \item Diagnose what is only local, what is globally consistent, and what is still heuristic.
 \end{enumerate}
 \end{block}
 
@@ -65,8 +69,8 @@ pattern on a square sheet — entirely from scratch.
 \textbf{Key objects}
 \begin{itemize}\small
   \item Sheet \([0,s]^2\); graph \(G=(V,E)\), positions \(X_v\in\RR^2\).
-  \item Crease label \(\operatorname{type}(e)\in\{-1,0,1\}\):
-        unassigned / mountain / valley.
+  \item Partial crease labeling \(\tau:E\to\{U,M,V\}\).
+  \item Complete MV assignment \(\sigma:E\to\{-1,+1\}\), with \(+1=M\) and \(-1=V\).
   \item \alert{Sector angle}: angle between consecutive creases at a vertex.
   \item \alert{Half-edge}: oriented edge — determines which face lies to its left.
 \end{itemize}
@@ -209,33 +213,143 @@ layer order visible.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
-\begin{frame}{Exact vs.\ heuristic — and conclusion}
+\begin{frame}{Algorithm V — Diagnostic status map}
+\footnotesize Let \(\CP=(G,X,\tau)\) be the current crease pattern, let \(V_{\mathrm{int}}\subseteq V\) denote the interior vertices, and let
+\[
+\kappa(v)=\left|\sum_{i\text{ odd}}\alpha_i(v)-\pi\right|
+\]
+be the Kawasaki residual at \(v\), where \(\alpha_1(v),\dots,\alpha_{2m(v)}(v)\) are the sector angles in cyclic order.
+
+\begin{block}{Reported statuses}
+\begin{enumerate}\footnotesize
+  \item \textbf{Local status = pass} iff every \(v\in V_{\mathrm{int}}\) has even degree and \(\kappa(v)\le \eps\).
+  \item \textbf{Assignment status = pass} iff \(\tau\) is complete and \(|M_\sigma(v)-V_\sigma(v)|=2\) for every \(v\in V_{\mathrm{int}}\).
+  \item \textbf{Global status = pass} iff the current embedding has no nonincident crease crossings, every crease borders exactly two traced faces, and reflection propagation is cycle-consistent on the face-adjacency graph.
+  \item \textbf{Exact-preview status = pass} iff the current geometry admits exact face reconstruction with no provisional signs and no mesh fallback.
+\end{enumerate}
+\end{block}
+
+\begin{alertblock}{Non-certifying outcomes}
+\footnotesize A warning is reported whenever exact reconstruction needs a reference-geometry reset, provisional completion of \(\tau\), or mesh fallback.
+\end{alertblock}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm VI — Implemented global-consistency test}
+\footnotesize The current code does \emph{not} solve arbitrary global flat-foldability. It implements the following certifier on the current embedding \(X\):
+
+\begin{block}{Implemented decision procedure}
+\begin{enumerate}\footnotesize
+  \item If nonincident fold segments cross, return \(\texttt{fail}\). If there are no folds, return \(\texttt{not\_run}\). If no MV assignment has been attempted, return \(\texttt{unknown}\).
+  \item Augment the fold graph by the square boundary, and order neighbors at each vertex by polar angle.
+  \item Trace bounded faces by the left-face rule \((u,v)\mapsto(v,w)\), where \(w\) is the predecessor of \(u\) in the cyclic order at \(v\). Reject repeated vertices or nonclosing walks.
+  \item Require every fold edge to border exactly two traced faces. Build the face-adjacency graph, choose a maximal-area root face, and set \(T_{f_0}=I\).
+  \item Across each crease \(\ell\), propagate \(T_g=R_{\ell}T_f\). On revisiting a face, compare the competing transforms: hard discrepancy gives \(\texttt{fail}\), soft discrepancy gives \(\texttt{warning}\).
+  \item Resolve fold signs from \(\tau\). Any missing sign is filled provisionally by face-depth parity, which downgrades the outcome to \(\texttt{warning}\).
+\end{enumerate}
+\end{block}
+
+\begin{alertblock}{Output interpretation}
+\footnotesize A final \(\texttt{pass}\) means: no crossings, successful exact face tracing, two-sided incidence for every fold, cycle-consistent reflections within tolerance, and no provisional MV completion. This is the strongest global certificate currently implemented in the code.
+\end{alertblock}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Scope of the local certificates}
+\begin{theorem}[Hull's local flat-foldability conditions]
+If a single-vertex crease pattern flat-folds, then its degree is even, its sector angles satisfy Kawasaki's alternating-sum identity, and every complete MV assignment satisfies Maekawa's relation \(|M-V|=2\). \textcolor{cpmid}{\cite{hull_math_flat}}
+\end{theorem}
+
+\begin{proof}[Interpretation in this project]
+\footnotesize The implemented \emph{local status} and \emph{assignment status} test these vertexwise necessary conditions, up to numerical tolerance \(\eps\). Bern--Hayes reduction is used only to derive local sign constraints and shrink the search over complete assignments \(\sigma\); it does not decide global flat-foldability for a multi-vertex pattern. Hence a pass certifies \emph{local admissibility}, not a global folding. \textcolor{cpmid}{\cite{hull_math_flat,bern_hayes}}
+\end{proof}
+
+\begin{block}{Why this distinction matters}
+\footnotesize Hull's theorem is local, while Bern--Hayes shows that exact flat foldability becomes globally difficult once many vertices interact. The report therefore keeps ``locally admissible assignment'' and ``globally certified current geometry'' separate. \textcolor{cpmid}{\cite{bern_hayes}}
+\end{block}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Meaning of a global or exact-preview pass}
+\begin{theorem}[Implemented exact-current-geometry certificate]
+If the algorithm on the previous slide returns \emph{global status = pass} and \emph{exact-preview status = pass}, then the current embedding of \(\CP\) has a noncrossing augmented planar graph, a closed family of bounded traced faces, a two-face incidence relation on every fold edge, and a cycle-consistent family of flat reflections \(T_g=R_{\ell}T_f\), all without provisional completion of the MV data.
+\end{theorem}
+
+\begin{proof}[Why this theorem is faithful to the code]
+\footnotesize
+\begin{enumerate}\itemsep2pt
+  \item `src/cp_generator/core.py` first rejects nonincident segment crossings.
+  \item `fold\_sim.py` then traces bounded faces by cyclic half-edge traversal and aborts on repetition or nonclosure.
+  \item The exact solver requires exactly two incident faces per fold and propagates transforms by explicit crease reflections.
+  \item Cycle drift beyond tolerance aborts; smaller drift or provisional sign completion downgrades to warning rather than pass.
+\end{enumerate}
+Thus the theorem states exactly what the present code certifies. It is not yet a complete decision procedure for arbitrary multi-vertex flat-foldability, but it is consistent with the formal viewpoint that valid flat foldings require noncrossing geometry and coherent global compatibility data. \textcolor{cpmid}{\cite{hull_zakharevich,eppstein_flat}}
+\end{proof}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Certified today vs.\ unresolved}
 \begin{columns}[T,onlytextwidth]
 \column{0.46\textwidth}
-\begin{block}{Exact (in this model)}
+\begin{block}{Currently certifiable}
 \begin{itemize}\small
-  \item Parity condition enforced.
-  \item Kawasaki solved to tolerance.
-  \item Maekawa filters every MV candidate.
-  \item Reflection cycles checked for consistency.
+  \item Vertexwise even-degree and Kawasaki residual checks.
+  \item Maekawa verification on a complete assignment \(\sigma\).
+  \item Explicit detection of nonincident crease crossings.
+  \item Exact face reconstruction on the current geometry.
 \end{itemize}
 \end{block}
 
 \column{0.50\textwidth}
-\begin{block}{Heuristic / design-driven}
+\begin{block}{Still non-certifying}
 \begin{itemize}\small
   \item Parity repair is not globally optimal.
-  \item Objective measures drift, not physical energy.
-  \item Bern--Hayes is local; not a full global classifier.
-  \item Interlacing score is aesthetic only.
+  \item Bern--Hayes reduction is local, not a full global classifier.
+  \item Reference-geometry and mesh preview fallbacks remain heuristic.
+  \item A true exact global checker is still needed for larger patterns.
 \end{itemize}
 \end{block}
 \end{columns}
 
-\bigskip
-\centering\small
-Delaunay graph $\;\to\;$ Kawasaki repair $\;\to\;$ MV search $\;\to\;$ animated 3D fold.\\[6pt]
-\textbf{\large\alert{Thank you.}}
+\begin{alertblock}{Best theoretical next step}
+\footnotesize The most plausible upgrade path is a bounded-instance exact checker based on ply and cell-adjacency complexity, built on the face arrangement already computed by the exact preview solver. \textcolor{cpmid}{\cite{eppstein_flat}}
+\end{alertblock}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}[allowframebreaks]{References}
+\footnotesize
+\begin{thebibliography}{9}
+\bibitem[BH96]{bern_hayes}
+Marshall Bern and Barry Hayes.
+\newblock \emph{The Complexity of Flat Origami}.
+\newblock SODA, 1996.
+
+\bibitem[Hul94]{hull_math_flat}
+Thomas C. Hull.
+\newblock \emph{On the Mathematics of Flat Origamis}.
+\newblock Congressus Numerantium, 1994.
+
+\bibitem[AE\!+\!15]{abel_rigid}
+Zachary Abel, Jason Cantarella, Erik D. Demaine, David Eppstein, Thomas C. Hull, Jason S. Ku, Robert J. Lang, and Tomohiro Tachi.
+\newblock \emph{Rigid Origami Vertices: Conditions and Forcing Sets}.
+\newblock Journal of Computational Geometry, 2015.
+
+\bibitem[Epp23]{eppstein_flat}
+David Eppstein.
+\newblock \emph{A Parameterized Algorithm for Flat Folding}.
+\newblock arXiv:2306.11939, 2023.
+
+\bibitem[HZ25]{hull_zakharevich}
+Thomas C. Hull and Inna Zakharevich.
+\newblock \emph{Flat Origami Is Turing Complete}.
+\newblock arXiv:2309.07932, 2025 version consulted.
+
+\bibitem[WS22]{walker_stankovic}
+Andreas Walker and Tino Stankovi\'c.
+\newblock \emph{Algorithmic Design of Origami Mechanisms and Tessellations}.
+\newblock Communications Materials, 2022.
+\end{thebibliography}
 \end{frame}
 
 \end{document}

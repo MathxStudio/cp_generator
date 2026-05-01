@@ -7,7 +7,7 @@ import math
 import numpy as np
 from scipy.spatial import Delaunay, QhullError
 
-import cp
+from . import core as cp
 
 
 BOUNDARY = "boundary"
@@ -44,6 +44,19 @@ class FaceRenderState:
     points: np.ndarray
     triangles: tuple[tuple[int, int, int], ...]
     top_surface: bool
+
+
+@dataclass(frozen=True)
+class FoldSimulationDiagnostic:
+    status: str
+    face_count: int | None
+    uses_provisional_signs: bool
+    uses_approximate_cycles: bool
+    cycle_drift: float | None
+    crossing_fold_pairs: tuple[tuple[int, int], ...]
+    message: str
+    preview_mode: str = "none"
+    used_reference_pattern: bool = False
 
 
 class FoldedFigureModel:
@@ -551,6 +564,54 @@ def build_folded_figure(pattern: cp.CreasePattern) -> FoldedFigureModel:
         uses_approximate_cycles=uses_approximate_cycles,
         cycle_drift=cycle_drift,
     )
+
+
+def try_build_folded_figure(
+    pattern: cp.CreasePattern,
+) -> tuple[FoldedFigureModel | None, FoldSimulationDiagnostic]:
+    try:
+        model = build_folded_figure(pattern)
+    except FoldSimulationError as exc:
+        return None, FoldSimulationDiagnostic(
+            status=cp.STATUS_FAIL,
+            face_count=None,
+            uses_provisional_signs=False,
+            uses_approximate_cycles=False,
+            cycle_drift=None,
+            crossing_fold_pairs=pattern.crossing_fold_pairs(),
+            message=str(exc),
+            preview_mode="none",
+            used_reference_pattern=False,
+        )
+
+    if model.uses_provisional_signs or model.uses_approximate_cycles:
+        status = cp.STATUS_WARNING
+        if model.uses_provisional_signs and model.uses_approximate_cycles:
+            message = "Exact face reconstruction succeeded with provisional signs and approximate cycle closure."
+        elif model.uses_provisional_signs:
+            message = "Exact face reconstruction succeeded, but some fold signs were inferred provisionally."
+        else:
+            message = "Exact face reconstruction succeeded, but face-cycle closure remained approximate."
+    else:
+        status = cp.STATUS_PASS
+        message = "Exact face reconstruction succeeded."
+
+    return model, FoldSimulationDiagnostic(
+        status=status,
+        face_count=model.face_count,
+        uses_provisional_signs=model.uses_provisional_signs,
+        uses_approximate_cycles=model.uses_approximate_cycles,
+        cycle_drift=model.cycle_drift,
+        crossing_fold_pairs=pattern.crossing_fold_pairs(),
+        message=message,
+        preview_mode="exact",
+        used_reference_pattern=False,
+    )
+
+
+def analyze_foldability(pattern: cp.CreasePattern) -> FoldSimulationDiagnostic:
+    _, diagnostic = try_build_folded_figure(pattern)
+    return diagnostic
 
 
 def build_approximate_folded_figure(pattern: cp.CreasePattern) -> ApproximateFoldedFigureModel:
