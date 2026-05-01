@@ -17,7 +17,7 @@ The Android shell is intentionally lean in this first version:
 
 1. Open `android-app/` in Android Studio.
 2. Install an Android SDK for the configured `compileSdk`.
-3. Make sure Python 3.11 is available, then set `CHAQUOPY_BUILD_PYTHON` if your IDE shell does not already expose it.
+3. Make sure Python 3.10 is available, then set `CHAQUOPY_BUILD_PYTHON` if your IDE shell does not already expose it.
 4. Build and run the `app` module on a device or emulator.
 
 ## CI build

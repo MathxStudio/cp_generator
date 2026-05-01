@@ -8,12 +8,12 @@ val pythonProjectRoot = rootProject.projectDir.parentFile.absolutePath
 
 android {
     namespace = "com.mathxstudio.cpgenerator"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.mathxstudio.cpgenerator"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
         vectorDrawables {
@@ -60,10 +60,10 @@ android {
 
 chaquopy {
     defaultConfig {
-        version = "3.11"
+        version = "3.10"
         pip {
-            install("numpy==1.26.4")
-            install("scipy==1.13.1")
+            install("numpy==1.23.3")
+            install("scipy==1.8.1")
         }
     }
 
