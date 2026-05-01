@@ -59,11 +59,6 @@ android {
 }
 
 chaquopy {
-    val buildPythonPath = System.getenv("CHAQUOPY_BUILD_PYTHON")
-    if (!buildPythonPath.isNullOrBlank()) {
-        buildPython(buildPythonPath)
-    }
-
     defaultConfig {
         version = "3.11"
         pip {
