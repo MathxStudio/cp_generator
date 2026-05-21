@@ -10,8 +10,9 @@ from tkinter import font as tkfont
 import numpy as np
 
 from . import core as cp
+from . import exporting
 from . import fold_sim
-from .samples import box_head as box_head_sample
+from . import mobile_api
 
 
 DEFAULT_POINTS = 8
@@ -92,6 +93,9 @@ class CPGeneratorApp:
 
     DEFAULT_AUTO_LOCAL_ROUNDS = 8
     DEFAULT_AUTO_FULL_ATTEMPTS = 24
+    DEFAULT_BATCH_SIZE = 4
+    DEFAULT_BATCH_PER_TARGET = 2
+    MAX_BATCH_SIZE = 100
     DEFAULT_TEXT_SCALE = 1.0
     MIN_TEXT_SCALE = 1.0
     MAX_TEXT_SCALE = 2.0
@@ -117,7 +121,6 @@ class CPGeneratorApp:
         self.preview_reference_pattern: cp.CreasePattern | None = None
         self.diagnostic_report: cp.PatternDiagnosticReport | None = None
         self.fold_simulation_diagnostic: fold_sim.FoldSimulationDiagnostic | None = None
-        self.sample_key: str | None = None
         self.fold_assignment_ready = False
         self._preview_job: str | None = None
         self._preview_direction = 1
@@ -1038,14 +1041,6 @@ class CPGeneratorApp:
         )
         load_button.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 12))
 
-        sample_button = ttk.Button(
-            actions_card,
-            text="Box Head",
-            command=self.load_box_head_sample,
-            style="Neutral.TButton",
-        )
-        sample_button.grid(row=6, column=0, sticky="ew", padx=16, pady=(0, 12))
-
         self._interactive_widgets.extend(
             [
                 optimize_button,
@@ -1053,7 +1048,6 @@ class CPGeneratorApp:
                 export_button,
                 save_button,
                 load_button,
-                sample_button,
             ]
         )
 
@@ -2037,9 +2031,6 @@ class CPGeneratorApp:
         return True
 
     def _refresh_preview_reference(self) -> None:
-        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
-            self.preview_reference_pattern = self._clone_pattern(self.pattern)
-            return
         if not self.pattern.folds:
             return
         candidate = self._clone_pattern(self.pattern)
@@ -2053,36 +2044,6 @@ class CPGeneratorApp:
         self.preview_progress_var.set(0.0)
         self._update_preview_progress_text()
         self.fold_simulation_diagnostic = None
-
-        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
-            self.preview_model = fold_sim.build_box_head_figure(self.pattern)
-            self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
-                status=cp.STATUS_WARNING,
-                face_count=getattr(self.preview_model, "face_count", None),
-                uses_provisional_signs=getattr(
-                    self.preview_model, "uses_provisional_signs", False
-                ),
-                uses_approximate_cycles=getattr(
-                    self.preview_model, "uses_approximate_cycles", False
-                ),
-                cycle_drift=getattr(self.preview_model, "cycle_drift", None),
-                crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
-                message="The Box Head sample uses an authored preview path rather than a plain exact-fold certificate.",
-                preview_mode="scripted",
-                used_reference_pattern=False,
-            )
-            self.preview_caption_var.set(
-                "The Box Head sample is folding from the authored crease pattern."
-            )
-            self.preview_detail_var.set(
-                "The animation now follows the existing fold solver first, then settles into a Box Head-specific shaped finish so the sample stays seamless and still reads like the reference character."
-            )
-            self._refresh_diagnostics()
-            self._sync_preview_controls()
-            self._redraw_preview()
-            if autoplay:
-                self._replay_preview(play=True)
-            return
 
         if not self.pattern.vertices:
             self.preview_model = None
@@ -2430,7 +2391,6 @@ class CPGeneratorApp:
 
         def action() -> None:
             self.pattern = self._build_pattern(point_count)
-            self.sample_key = None
             self.preview_reference_pattern = self._clone_pattern(self.pattern)
             self.fold_assignment_ready = False
             self.preview_model = None
@@ -2467,15 +2427,6 @@ class CPGeneratorApp:
                 "Generate a crease pattern before optimizing it.",
                 "The optimizer needs an active sheet.",
                 tone="warning",
-            )
-            return
-
-        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
-            self._set_status(
-                "Locked",
-                "The Box Head sample already uses authored 16x16 geometry.",
-                "Optimization is skipped so the published grid and the dedicated folded preview stay aligned.",
-                tone="neutral",
             )
             return
 
@@ -2529,15 +2480,6 @@ class CPGeneratorApp:
                 "Generate a crease pattern before running local automation.",
                 "Auto local optimization keeps refining the current sheet until the local badge turns green or the round limit is reached.",
                 tone="warning",
-            )
-            return
-
-        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
-            self._set_status(
-                "Locked",
-                "The Box Head sample already uses authored geometry.",
-                "Automation is skipped so the published sample remains unchanged.",
-                tone="neutral",
             )
             return
 
@@ -2605,7 +2547,6 @@ class CPGeneratorApp:
             last_assignment_message = "No search attempt was executed."
             for attempt in range(1, max_attempts + 1):
                 self.pattern = self._build_pattern(point_count)
-                self.sample_key = None
                 self.preview_reference_pattern = self._clone_pattern(self.pattern)
                 self.fold_assignment_ready = False
                 self.preview_model = None
@@ -2689,23 +2630,6 @@ class CPGeneratorApp:
             )
             return
 
-        if self.sample_key == box_head_sample.BOX_HEAD_KEY:
-            self.fold_assignment_ready = True
-            self.sheet_caption_var.set(
-                "This authored 16x16 sample already carries mountain and valley assignments from the published crease pattern."
-            )
-            self._set_status(
-                "Assigned",
-                "The Box Head sample is already assigned and ready to animate.",
-                "Press play on the right to inspect the dedicated folded character from any angle.",
-                tone="success",
-            )
-            self._refresh_preview_reference()
-            self._update_stats()
-            self._rebuild_preview(autoplay=True)
-            self._redraw_sheet()
-            return
-
         def action() -> None:
             res = self.pattern.assign_mv()
             if not res.success:
@@ -2787,43 +2711,659 @@ class CPGeneratorApp:
         if not self.pattern.vertices:
             self._set_status(
                 "No Pattern",
-                "Generate a crease pattern before saving a session.",
-                "A session file stores the current sheet, fold assignments, and preview-ready state.",
+                "Generate a crease pattern before opening the save dialog.",
+                "Save can write the current sheet or a numbered batch as JSON sessions or printable PDFs.",
                 tone="warning",
             )
             return
 
-        filename = filedialog.asksaveasfilename(
-            title="Save fold session",
-            defaultextension=".cpfold.json",
-            filetypes=[
-                ("Crease pattern session", "*.cpfold.json"),
-                ("JSON files", "*.json"),
-            ],
-            initialfile="fold_session.cpfold.json",
-        )
-        if not filename:
+        config = self._prompt_save_config()
+        if config is None:
             self._set_status(
                 "Save Canceled",
                 "Save was canceled before any files were written.",
-                "Choose a destination when you want to persist the current fold state.",
+                "Choose a save mode, output type, and destination folder when you are ready to export.",
                 tone="neutral",
             )
             return
 
-        save_path = Path(filename)
+        output_dir = Path(str(config["directory"]))
+        mode = str(config["mode"])
+        save_kind = str(config["kind"])
+
+        if mode == "current":
+            def action() -> None:
+                allocator = exporting.BatchNameAllocator(output_dir)
+                current_report = self._merged_pattern_report(self.pattern)
+                saved_paths = self._save_pattern_output(
+                    self.pattern,
+                    allocator=allocator,
+                    save_kind=save_kind,
+                    point_count_hint=self._current_point_count_hint(),
+                    fold_assignment_ready=bool(self.fold_assignment_ready),
+                    metadata_lines=(
+                        "Source: current pattern",
+                        f"All green: {'yes' if mobile_api._all_green(current_report) else 'no'}",
+                    ),
+                )
+                self._set_status(
+                    "Saved",
+                    f"Saved {len(saved_paths)} {self._file_noun(len(saved_paths))}.",
+                    (
+                        f"The current pattern was exported to {output_dir} as "
+                        f"{self._save_kind_label(save_kind)} using slot {self._save_slot_label(saved_paths)} "
+                        f"for {len(self.pattern.vertices)} vertices."
+                    ),
+                    tone="success",
+                )
+
+            self._run_action("Saving the current pattern...", action)
+            return
+
+        max_attempts = self._parse_iteration_limit(
+            self.auto_full_attempt_limit_var, "Search tries"
+        )
+        if max_attempts is None:
+            return
+
+        max_local_rounds = self._parse_iteration_limit(
+            self.auto_local_round_limit_var, "Local rounds"
+        )
+        if max_local_rounds is None:
+            return
+
+        if mode == "batch_current":
+            additional_count = int(config["additional_count"])
+
+            def action() -> None:
+                allocator = exporting.BatchNameAllocator(output_dir)
+                saved_paths: list[Path] = []
+                generated_count = 0
+
+                current_report = self._merged_pattern_report(self.pattern)
+                current_paths = self._save_pattern_output(
+                    self.pattern,
+                    allocator=allocator,
+                    save_kind=save_kind,
+                    point_count_hint=self._current_point_count_hint(),
+                    fold_assignment_ready=bool(self.fold_assignment_ready),
+                    metadata_lines=(
+                        "Source: current pattern",
+                        f"All green: {'yes' if mobile_api._all_green(current_report) else 'no'}",
+                        f"Locked vertices: {len(self.pattern.vertices)}",
+                    ),
+                )
+                saved_paths.extend(current_paths)
+
+                target_vertex_count = len(self.pattern.vertices)
+                point_count_hint = self._current_point_count_hint(
+                    fallback=max(target_vertex_count - 4, 0)
+                )
+
+                for index in range(additional_count):
+                    self._set_status(
+                        "Working",
+                        f"Searching all-green pattern {index + 1}/{additional_count} for {target_vertex_count} vertices.",
+                        "The current sheet is already reserved; now the search is looking for additional fully green patterns with the same vertex count.",
+                        tone="working",
+                    )
+                    self.root.update_idletasks()
+
+                    pattern, search = self._find_all_green_pattern(
+                        target_vertex_count=target_vertex_count,
+                        max_attempts=max_attempts,
+                        max_local_rounds=max_local_rounds,
+                        point_count_hint=point_count_hint,
+                    )
+                    if pattern is None:
+                        continue
+
+                    saved_paths.extend(
+                        self._save_pattern_output(
+                            pattern,
+                            allocator=allocator,
+                            save_kind=save_kind,
+                            point_count_hint=int(search["point_count_used"]),
+                            fold_assignment_ready=True,
+                            metadata_lines=(
+                                "Source: batch search",
+                                "All green: yes",
+                                f"Locked vertices: {target_vertex_count}",
+                                f"Search attempts used: {search['attempts_used']}/{max_attempts}",
+                                f"Local rounds used: {search['local_rounds_used']}/{max_local_rounds}",
+                            ),
+                        )
+                    )
+                    generated_count += 1
+
+                requested_total = (additional_count + 1) * self._save_output_multiplier(
+                    save_kind
+                )
+                noun = self._file_noun(len(saved_paths))
+                tone = "success" if generated_count == additional_count else "warning"
+                detail = (
+                    f"Saved {len(saved_paths)} {noun} in {output_dir}. "
+                    f"The current pattern was included first, and {generated_count} of {additional_count} requested additional all-green searches succeeded for {target_vertex_count} vertices."
+                )
+                self._set_status(
+                    "Saved",
+                    f"Saved {len(saved_paths)}/{requested_total} numbered {self._save_kind_label(save_kind)} {noun}.",
+                    detail,
+                    tone=tone,
+                )
+
+            self._run_action(
+                "Saving the current pattern and searching for additional all-green matches...",
+                action,
+            )
+            return
+
+        targets = tuple(int(value) for value in config["targets"])
+        per_target_count = int(config["per_target_count"])
 
         def action() -> None:
-            payload = self._session_data()
-            save_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            allocator = exporting.BatchNameAllocator(output_dir)
+            saved_paths: list[Path] = []
+            failures: list[int] = []
+
+            for target_vertex_count in targets:
+                for index in range(per_target_count):
+                    self._set_status(
+                        "Working",
+                        (
+                            f"Searching all-green pattern {index + 1}/{per_target_count} "
+                            f"for {target_vertex_count} vertices."
+                        ),
+                        "The batch search is iterating through the requested vertex targets and saving only fully green patterns that match each target count.",
+                        tone="working",
+                    )
+                    self.root.update_idletasks()
+
+                    pattern, search = self._find_all_green_pattern(
+                        target_vertex_count=target_vertex_count,
+                        max_attempts=max_attempts,
+                        max_local_rounds=max_local_rounds,
+                        point_count_hint=max(target_vertex_count - 4, 0),
+                    )
+                    if pattern is None:
+                        failures.append(target_vertex_count)
+                        continue
+
+                    saved_paths.extend(
+                        self._save_pattern_output(
+                            pattern,
+                            allocator=allocator,
+                            save_kind=save_kind,
+                            point_count_hint=int(search["point_count_used"]),
+                            fold_assignment_ready=True,
+                            metadata_lines=(
+                                "Source: vertex-target batch search",
+                                "All green: yes",
+                                f"Target vertices: {target_vertex_count}",
+                                f"Search attempts used: {search['attempts_used']}/{max_attempts}",
+                                f"Local rounds used: {search['local_rounds_used']}/{max_local_rounds}",
+                            ),
+                        )
+                    )
+
+            requested_total = (
+                len(targets)
+                * per_target_count
+                * self._save_output_multiplier(save_kind)
+            )
+            noun = self._file_noun(len(saved_paths))
+            tone = "success" if len(saved_paths) == requested_total else "warning"
+            detail = (
+                f"Saved {len(saved_paths)} {noun} in {output_dir}. "
+                f"Requested {per_target_count} all-green export"
+                f"{'' if per_target_count == 1 else 's'} for each target in {targets}."
+            )
+            if failures:
+                detail += (
+                    f" Searches failed for {len(failures)} requested slot"
+                    f"{'' if len(failures) == 1 else 's'} before the attempt limit was reached."
+                )
             self._set_status(
                 "Saved",
-                f"Saved {save_path.name}.",
-                f"The session can be loaded later to restore the current sheet and fold state from {save_path.parent}.",
-                tone="success",
+                f"Saved {len(saved_paths)}/{requested_total} numbered {self._save_kind_label(save_kind)} {noun}.",
+                detail,
+                tone=tone,
             )
 
-        self._run_action("Saving session data...", action)
+        self._run_action("Searching and saving all-green vertex-target batches...", action)
+
+    def _prompt_save_config(self) -> dict[str, object] | None:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Save")
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.configure(bg=self.COLORS["panel"])
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+
+        container = ttk.Frame(dialog, style="Panel.TFrame", padding=18)
+        container.grid(row=0, column=0, sticky="nsew")
+        container.columnconfigure(1, weight=1)
+
+        format_options = {
+            "Printable PDF (.pdf)": "pdf",
+            "Session JSON (.cpfold.json)": "json",
+            "JSON + PDF": "both",
+        }
+        mode_options = {
+            "Current pattern": "current",
+            "Batch: current vertex count": "batch_current",
+            "Batch: vertex targets": "batch_targets",
+        }
+        mode_var = tk.StringVar(value="Current pattern")
+        format_var = tk.StringVar(value="Printable PDF (.pdf)")
+        directory_var = tk.StringVar(value=str(Path.cwd()))
+        additional_count_var = tk.StringVar(value=str(self.DEFAULT_BATCH_SIZE))
+        target_spec_var = tk.StringVar(
+            value=f"{max(len(self.pattern.vertices), 4)}"
+        )
+        per_target_count_var = tk.StringVar(value=str(self.DEFAULT_BATCH_PER_TARGET))
+        error_var = tk.StringVar()
+        result: dict[str, object] = {}
+
+        ttk.Label(container, text="Save", style="PanelTitle.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w"
+        )
+        ttk.Label(
+            container,
+            text=(
+                "Single-save and batch-save share the same numbered naming system. "
+                "Choose whether to export the current pattern or search for new all-green batches."
+            ),
+            style="PanelBody.TLabel",
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 14))
+
+        ttk.Label(container, text="Mode", style="CardMuted.TLabel").grid(
+            row=2, column=0, sticky="w"
+        )
+        mode_combo = ttk.Combobox(
+            container,
+            textvariable=mode_var,
+            values=tuple(mode_options.keys()),
+            state="readonly",
+            style="Modern.TCombobox",
+        )
+        mode_combo.grid(row=2, column=1, sticky="ew", pady=(0, 12))
+
+        ttk.Label(container, text="Save type", style="CardMuted.TLabel").grid(
+            row=3, column=0, sticky="w"
+        )
+        format_combo = ttk.Combobox(
+            container,
+            textvariable=format_var,
+            values=tuple(format_options.keys()),
+            state="readonly",
+            style="Modern.TCombobox",
+        )
+        format_combo.grid(row=3, column=1, sticky="ew", pady=(0, 12))
+
+        ttk.Label(container, text="Destination", style="CardMuted.TLabel").grid(
+            row=4, column=0, sticky="w"
+        )
+        folder_row = ttk.Frame(container, style="Panel.TFrame")
+        folder_row.grid(row=4, column=1, sticky="ew", pady=(0, 8))
+        folder_row.columnconfigure(0, weight=1)
+        ttk.Entry(
+            folder_row,
+            textvariable=directory_var,
+            style="Modern.TEntry",
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
+
+        def choose_directory() -> None:
+            selected = filedialog.askdirectory(
+                parent=dialog,
+                title="Choose save output folder",
+                mustexist=True,
+                initialdir=directory_var.get() or str(Path.cwd()),
+            )
+            if selected:
+                directory_var.set(selected)
+
+        ttk.Button(
+            folder_row,
+            text="Browse",
+            command=choose_directory,
+            style="Compact.Neutral.TButton",
+        ).grid(row=0, column=1, sticky="e")
+
+        details_frame = ttk.Frame(container, style="Panel.TFrame")
+        details_frame.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        details_frame.columnconfigure(0, weight=1)
+
+        validate_cmd = (self.root.register(self._validate_point_count), "%P")
+        current_frame = ttk.Frame(details_frame, style="Panel.TFrame")
+        current_frame.columnconfigure(0, weight=1)
+        ttk.Label(
+            current_frame,
+            text=(
+                "Save the current pattern using the next free numbered slot for its current vertex count. "
+                "The save type above can write session JSON, printable duplex PDF, or both together."
+            ),
+            style="PanelMuted.TLabel",
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew")
+
+        batch_current_frame = ttk.Frame(details_frame, style="Panel.TFrame")
+        batch_current_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            batch_current_frame,
+            text="Additional all-greens",
+            style="CardMuted.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        additional_entry = ttk.Entry(
+            batch_current_frame,
+            textvariable=additional_count_var,
+            style="Modern.TEntry",
+            justify="center",
+            width=8,
+            validate="key",
+            validatecommand=validate_cmd,
+        )
+        additional_entry.grid(row=0, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(
+            batch_current_frame,
+            text=(
+                "The current pattern is saved first, then the app searches for more all-green patterns "
+                f"with the same current vertex count ({len(self.pattern.vertices)})."
+            ),
+            style="PanelMuted.TLabel",
+            justify="left",
+        ).grid(row=1, column=0, columnspan=2, sticky="ew")
+
+        batch_targets_frame = ttk.Frame(details_frame, style="Panel.TFrame")
+        batch_targets_frame.columnconfigure(1, weight=1)
+        ttk.Label(
+            batch_targets_frame,
+            text="Vertex targets",
+            style="CardMuted.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        targets_entry = ttk.Entry(
+            batch_targets_frame,
+            textvariable=target_spec_var,
+            style="Modern.TEntry",
+        )
+        targets_entry.grid(row=0, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(
+            batch_targets_frame,
+            text="All-greens each",
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=0, sticky="w")
+        per_target_entry = ttk.Entry(
+            batch_targets_frame,
+            textvariable=per_target_count_var,
+            style="Modern.TEntry",
+            justify="center",
+            width=8,
+            validate="key",
+            validatecommand=validate_cmd,
+        )
+        per_target_entry.grid(row=1, column=1, sticky="ew", pady=(0, 8))
+        ttk.Label(
+            batch_targets_frame,
+            text="Use `8-16:2` for ranges with jumps, `8,11,14` for discrete arrays, or combine them with commas.",
+            style="PanelMuted.TLabel",
+            justify="left",
+        ).grid(row=2, column=0, columnspan=2, sticky="ew")
+
+        ttk.Label(
+            container,
+            text=(
+                "Names are auto-assigned as `cp-v<vertices>-00` through `cp-v<vertices>-99`, "
+                "always filling the lowest free number first."
+            ),
+            style="PanelMuted.TLabel",
+            justify="left",
+        ).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 8))
+        tk.Label(
+            container,
+            textvariable=error_var,
+            bg=self.COLORS["panel"],
+            fg=self.BADGE_COLORS["danger"][0],
+            font=self.fonts["small"],
+            justify="left",
+            anchor="w",
+            wraplength=340,
+        ).grid(row=7, column=0, columnspan=2, sticky="ew", pady=(0, 10))
+
+        button_row = ttk.Frame(container, style="Panel.TFrame")
+        button_row.grid(row=8, column=0, columnspan=2, sticky="e")
+
+        def refresh_mode_fields(*_args) -> None:
+            current_frame.grid_remove()
+            batch_current_frame.grid_remove()
+            batch_targets_frame.grid_remove()
+            mode_key = mode_options[mode_var.get()]
+            if mode_key == "current":
+                current_frame.grid(row=0, column=0, sticky="ew")
+            elif mode_key == "batch_current":
+                batch_current_frame.grid(row=0, column=0, sticky="ew")
+            else:
+                batch_targets_frame.grid(row=0, column=0, sticky="ew")
+            error_var.set("")
+
+        def close_dialog() -> None:
+            dialog.grab_release()
+            dialog.destroy()
+
+        def submit() -> None:
+            directory = directory_var.get().strip()
+            if not directory:
+                error_var.set("Choose a destination folder for the exports.")
+                return
+
+            mode_key = mode_options[mode_var.get()]
+            payload: dict[str, object] = {
+                "mode": mode_key,
+                "directory": directory,
+                "kind": format_options[format_var.get()],
+            }
+
+            if mode_key == "batch_current":
+                raw_count = additional_count_var.get().strip()
+                if not raw_count:
+                    error_var.set("Enter how many additional all-green patterns to search for.")
+                    return
+                batch_count = int(raw_count)
+                if batch_count <= 0 or batch_count > self.MAX_BATCH_SIZE:
+                    error_var.set(
+                        f"Additional all-greens must be between 1 and {self.MAX_BATCH_SIZE}."
+                    )
+                    return
+                payload["additional_count"] = batch_count
+            elif mode_key == "batch_targets":
+                raw_count = per_target_count_var.get().strip()
+                if not raw_count:
+                    error_var.set("Enter how many all-green patterns to search for per target.")
+                    return
+                per_target_count = int(raw_count)
+                if per_target_count <= 0 or per_target_count > self.MAX_BATCH_SIZE:
+                    error_var.set(
+                        f"All-greens per target must be between 1 and {self.MAX_BATCH_SIZE}."
+                    )
+                    return
+                try:
+                    payload["targets"] = exporting.parse_vertex_target_spec(
+                        target_spec_var.get()
+                    )
+                except ValueError as exc:
+                    error_var.set(str(exc))
+                    return
+                payload["per_target_count"] = per_target_count
+
+            result.update(payload)
+            close_dialog()
+
+        ttk.Button(
+            button_row,
+            text="Cancel",
+            command=close_dialog,
+            style="Compact.Neutral.TButton",
+        ).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(
+            button_row,
+            text="Save",
+            command=submit,
+            style="Neutral.TButton",
+        ).grid(row=0, column=1)
+
+        dialog.protocol("WM_DELETE_WINDOW", close_dialog)
+        mode_var.trace_add("write", refresh_mode_fields)
+        refresh_mode_fields()
+        dialog.grab_set()
+        mode_combo.focus_set()
+        dialog.wait_window()
+        return result or None
+
+    def _save_pattern_output(
+        self,
+        pattern: cp.CreasePattern,
+        *,
+        allocator: exporting.BatchNameAllocator,
+        save_kind: str,
+        point_count_hint: int,
+        fold_assignment_ready: bool,
+        metadata_lines: tuple[str, ...],
+    ) -> tuple[Path, ...]:
+        if save_kind == "both":
+            target_paths = allocator.allocate_pair(
+                vertex_count=len(pattern.vertices)
+            )
+        else:
+            target_paths = (
+                allocator.allocate(
+                    vertex_count=len(pattern.vertices),
+                    kind="pdf" if save_kind == "pdf" else "json",
+                ),
+            )
+
+        pdf_path = next((path for path in target_paths if path.suffix == ".pdf"), None)
+        if pdf_path is not None:
+            exporting.write_printable_pdf(
+                pattern,
+                pdf_path,
+                extra_metadata_lines=metadata_lines,
+            )
+
+        json_path = next((path for path in target_paths if path.suffix == ".json"), None)
+        if json_path is not None:
+            payload = self._session_data_for_pattern(
+                pattern,
+                point_count=point_count_hint,
+                preview_reference_pattern=pattern.clone(),
+                fold_assignment_ready=fold_assignment_ready,
+            )
+            exporting.write_session_json(payload, json_path)
+        return target_paths
+
+    def _save_kind_label(self, save_kind: str) -> str:
+        return {
+            "json": "JSON",
+            "pdf": "PDF",
+            "both": "JSON + PDF",
+        }.get(save_kind, save_kind.upper())
+
+    def _save_output_multiplier(self, save_kind: str) -> int:
+        return 2 if save_kind == "both" else 1
+
+    def _file_noun(self, count: int) -> str:
+        return "file" if count == 1 else "files"
+
+    def _save_slot_label(self, paths: tuple[Path, ...] | list[Path]) -> str:
+        return paths[0].name.split(".", 1)[0]
+
+    def _find_all_green_pattern(
+        self,
+        *,
+        target_vertex_count: int,
+        max_attempts: int,
+        max_local_rounds: int,
+        point_count_hint: int,
+    ) -> tuple[cp.CreasePattern | None, dict[str, int | bool]]:
+        candidate_point_counts = self._point_count_hints_for_target(
+            target_vertex_count,
+            preferred=point_count_hint,
+        )
+        last_point_count = candidate_point_counts[-1]
+
+        for attempt in range(1, max_attempts + 1):
+            point_count = candidate_point_counts[(attempt - 1) % len(candidate_point_counts)]
+            last_point_count = point_count
+            pattern = self._build_pattern(point_count)
+            if len(pattern.vertices) != target_vertex_count:
+                continue
+
+            rounds = 0
+            report = pattern.analyze_pattern()
+            while rounds < max_local_rounds and report.local_status != cp.STATUS_PASS:
+                pattern.optimize()
+                for fold in pattern.folds:
+                    fold.type = -1
+                rounds += 1
+                report = pattern.analyze_pattern()
+
+            assignment = pattern.assign_mv()
+            merged = self._merged_pattern_report(pattern)
+            if assignment.success and mobile_api._all_green(merged):
+                return pattern, {
+                    "attempts_used": attempt,
+                    "local_rounds_used": rounds,
+                    "point_count_used": point_count,
+                    "assignment_success": True,
+                    "all_green": True,
+                }
+
+        return None, {
+            "attempts_used": max_attempts,
+            "local_rounds_used": max_local_rounds,
+            "point_count_used": last_point_count,
+            "assignment_success": False,
+            "all_green": False,
+        }
+
+    def _point_count_hints_for_target(
+        self,
+        target_vertex_count: int,
+        *,
+        preferred: int | None = None,
+    ) -> tuple[int, ...]:
+        hints: list[int] = []
+
+        def add(value: int) -> None:
+            value = max(int(value), 0)
+            if value not in hints:
+                hints.append(value)
+
+        if preferred is not None:
+            add(preferred)
+            add(preferred + 1)
+            add(preferred + 2)
+
+        base = max(target_vertex_count - 4, 0)
+        for offset in range(0, 7):
+            add(base + offset)
+
+        return tuple(hints)
+
+    def _merged_pattern_report(
+        self, pattern: cp.CreasePattern
+    ) -> cp.PatternDiagnosticReport:
+        report = pattern.analyze_pattern()
+        _, preview_diagnostic, _ = mobile_api._build_preview(pattern)
+        return mobile_api._merge_report_with_preview(report, preview_diagnostic)
+
+    def _current_point_count_hint(self, fallback: int | None = None) -> int:
+        raw = self.point_count_var.get().strip()
+        if raw:
+            return max(int(raw), 0)
+        if fallback is not None:
+            return max(int(fallback), 0)
+        return max(len(self.pattern.vertices) - 4, 0)
 
     def load_session(self) -> None:
         filename = filedialog.askopenfilename(
@@ -2860,51 +3400,43 @@ class CPGeneratorApp:
 
         self._run_action("Loading session data...", action)
 
-    def load_box_head_sample(self) -> None:
-        def action() -> None:
-            self.pattern = box_head_sample.build_box_head_pattern()
-            self.sample_key = box_head_sample.BOX_HEAD_KEY
-            self.preview_reference_pattern = self._clone_pattern(self.pattern)
-            self.fold_assignment_ready = True
-            self.preview_model = None
-            self.fold_simulation_diagnostic = None
-            self.point_count_var.set("16")
-            self._reset_preview_camera()
-            self._update_stats()
-            self._set_optimize_metrics()
-            self.automation_note_var.set(
-                "The authored sample is ready for inspection; generation automation is disabled for it."
-            )
-            self.sheet_caption_var.set(
-                "This is an authored 16x16 Box Head crease pattern sample with fixed mountain and valley assignments."
-            )
-            self._set_status(
-                "Loaded",
-                "Loaded the Box Head 16x16 sample.",
-                "The right panel now uses a dedicated folded character preview based on the published design page and tutorial reference.",
-                tone="success",
-            )
-            self._rebuild_preview(autoplay=True)
-            self._redraw_sheet()
-
-        self._run_action("Loading Box Head sample...", action)
-
     def _session_data(self) -> dict[str, object]:
+        return self._session_data_for_pattern(self.pattern)
+
+    def _session_data_for_pattern(
+        self,
+        pattern: cp.CreasePattern,
+        *,
+        point_count: int | str | None = None,
+        preview_reference_pattern: cp.CreasePattern | None = None,
+        fold_assignment_ready: bool | None = None,
+    ) -> dict[str, object]:
+        if point_count is None:
+            point_count_value = self.point_count_var.get()
+        else:
+            point_count_value = str(point_count)
+        if preview_reference_pattern is None:
+            if pattern is self.pattern:
+                preview_reference_pattern = self.preview_reference_pattern
+            else:
+                preview_reference_pattern = self._clone_pattern(pattern)
+        if fold_assignment_ready is None:
+            fold_assignment_ready = bool(self.fold_assignment_ready)
+
         return {
             "format": "cp-generator-session",
             "version": 1,
-            "sample_key": self.sample_key,
-            "point_count": self.point_count_var.get(),
+            "point_count": point_count_value,
             "text_scale": self.user_text_scale,
             "sidebar_width": self.sidebar_width,
             "show_labels": bool(self.show_labels_var.get()),
             "preview_loop": bool(self.preview_loop_var.get()),
             "preview_edge_families": bool(self.preview_edge_families_var.get()),
-            "fold_assignment_ready": bool(self.fold_assignment_ready),
-            "pattern": self.pattern.to_data(),
+            "fold_assignment_ready": bool(fold_assignment_ready),
+            "pattern": pattern.to_data(),
             "preview_reference_pattern": (
-                self.preview_reference_pattern.to_data()
-                if self.preview_reference_pattern is not None
+                preview_reference_pattern.to_data()
+                if preview_reference_pattern is not None
                 else None
             ),
         }
@@ -2921,8 +3453,6 @@ class CPGeneratorApp:
 
         preview_reference_data = payload.get("preview_reference_pattern")
         self.pattern = cp.CreasePattern.from_data(pattern_data)
-        sample_key = payload.get("sample_key")
-        self.sample_key = str(sample_key) if isinstance(sample_key, str) else None
         self.preview_reference_pattern = (
             cp.CreasePattern.from_data(preview_reference_data)
             if isinstance(preview_reference_data, dict)

@@ -149,7 +149,6 @@ private fun CpGeneratorApp(viewModel: MainViewModel) {
                 onGenerate = viewModel::generatePattern,
                 onRefine = viewModel::refinePattern,
                 onAssign = viewModel::assignPattern,
-                onLoadSample = viewModel::loadSample,
                 onAutoLocalGreen = viewModel::optimizeUntilLocalGreen,
                 onAutoAllGreen = viewModel::autoAllGreen,
             )
@@ -171,7 +170,7 @@ private fun HeroCard(state: MainUiState) {
     val snapshot = state.snapshot
     val status = snapshot?.status ?: StatusBanner(
         title = "Preparing studio",
-        message = "Loading the authored sample and mobile preview pipeline.",
+        message = "Generating a fresh sheet and loading the mobile preview pipeline.",
         tone = "neutral",
     )
 
@@ -777,12 +776,10 @@ private fun ControlsCard(
     onGenerate: () -> Unit,
     onRefine: () -> Unit,
     onAssign: () -> Unit,
-    onLoadSample: () -> Unit,
     onAutoLocalGreen: () -> Unit,
     onAutoAllGreen: () -> Unit,
 ) {
     val snapshot = state.snapshot
-    val isSample = snapshot?.sampleKey != null
     val hasPattern = snapshot != null
 
     Surface(
@@ -846,7 +843,6 @@ private fun ControlsCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Button(
                     onClick = onGenerate,
@@ -857,22 +853,9 @@ private fun ControlsCard(
                         contentColor = Paper,
                     ),
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("Randomize")
-                }
-                FilledTonalButton(
-                    onClick = onLoadSample,
-                    enabled = !state.isBusy,
-                    shape = RoundedCornerShape(22.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = Sage.copy(alpha = 0.18f),
-                        contentColor = Sage,
-                    ),
-                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text("Box Head")
                 }
             }
 
@@ -882,7 +865,7 @@ private fun ControlsCard(
             ) {
                 FilledTonalButton(
                     onClick = onRefine,
-                    enabled = !state.isBusy && hasPattern && !isSample,
+                    enabled = !state.isBusy && hasPattern,
                     shape = RoundedCornerShape(22.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = Sand,
@@ -895,7 +878,7 @@ private fun ControlsCard(
                 }
                 OutlinedButton(
                     onClick = onAssign,
-                    enabled = !state.isBusy && hasPattern && !isSample,
+                    enabled = !state.isBusy && hasPattern,
                     shape = RoundedCornerShape(22.dp),
                     contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
                     modifier = Modifier.weight(1f),
@@ -910,7 +893,7 @@ private fun ControlsCard(
             ) {
                 FilledTonalButton(
                     onClick = onAutoLocalGreen,
-                    enabled = !state.isBusy && hasPattern && !isSample,
+                    enabled = !state.isBusy && hasPattern,
                     shape = RoundedCornerShape(22.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = Teal.copy(alpha = 0.16f),
@@ -1214,7 +1197,6 @@ data class MobileSnapshot(
     val summary: String,
     val note: String,
     val pointCount: Int?,
-    val sampleKey: String?,
     val status: StatusBanner,
     val stats: StatsModel,
     val diagnostics: List<DiagnosticModel>,
@@ -1321,7 +1303,7 @@ private data class RenderFace(
 )
 
 data class UpdateUiState(
-    val currentVersion: String = "0.1.0",
+    val currentVersion: String = "0.2.0",
     val latestVersion: String? = null,
     val message: String = "Check the release channel when you want to look for a newer APK.",
     val tone: String = "neutral",
@@ -1349,7 +1331,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var downloadPollJob: Job? = null
 
     init {
-        loadSample()
+        generatePattern()
     }
 
     fun updatePointCount(value: Float) {
@@ -1432,12 +1414,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 maxAttempts = state.searchAttempts,
                 maxLocalRounds = state.localRounds,
             )
-        }
-    }
-
-    fun loadSample() {
-        launchOperation {
-            repository.loadBoxHead()
         }
     }
 
@@ -1583,10 +1559,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private class MobileBridgeRepository(
     private val context: Context,
 ) {
-    fun loadBoxHead(): MobileSnapshot {
-        return parseSnapshot(call("load_box_head"))
-    }
-
     fun buildRandomPattern(pointCount: Int): MobileSnapshot {
         return parseSnapshot(call("build_random_pattern", pointCount))
     }
@@ -1622,9 +1594,9 @@ private class AppUpdateRepository(
     fun currentVersionName(): String {
         return try {
             @Suppress("DEPRECATION")
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.0"
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.2.0"
         } catch (_: Exception) {
-            "0.1.0"
+            "0.2.0"
         }
     }
 
@@ -1823,7 +1795,6 @@ private fun parseSnapshot(raw: String): MobileSnapshot {
         summary = json.getString("summary"),
         note = json.getString("note"),
         pointCount = json.optIntOrNull("point_count"),
-        sampleKey = json.optStringOrNull("sample_key"),
         status = StatusBanner(
             title = statusJson.getString("title"),
             message = statusJson.getString("message"),

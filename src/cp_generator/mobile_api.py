@@ -4,7 +4,6 @@ import json
 
 from . import core as cp
 from . import fold_sim
-from .samples import box_head as box_head_sample
 
 
 MODEL_SIDE = 500
@@ -172,18 +171,6 @@ def auto_all_green(
     )
 
 
-def load_box_head() -> str:
-    pattern = box_head_sample.build_box_head_pattern()
-    return _snapshot(
-        pattern,
-        point_count=None,
-        status_title="Box Head sample",
-        status_message="Loaded the authored 16x16 sample crease pattern.",
-        note="This sample already includes mountain and valley assignments and is ready for inspection immediately.",
-        sample_key=box_head_sample.BOX_HEAD_KEY,
-    )
-
-
 def _build_pattern(point_count: int) -> cp.CreasePattern:
     pattern = cp.CreasePattern()
     pattern.side = MODEL_SIDE
@@ -246,14 +233,10 @@ def _snapshot(
     status_message: str,
     note: str,
     point_count: int | None = None,
-    sample_key: str | None = None,
     automation: dict[str, object] | None = None,
 ) -> str:
     report = pattern.analyze_pattern()
-    preview_model, preview_diagnostic, preview_payload = _build_preview(
-        pattern,
-        sample_key=sample_key,
-    )
+    preview_model, preview_diagnostic, preview_payload = _build_preview(pattern)
     merged = _merge_report_with_preview(report, preview_diagnostic)
     assignment = merged.fold_assignment
     data_json = json.dumps(pattern.to_data(), separators=(",", ":"), sort_keys=True)
@@ -261,11 +244,10 @@ def _snapshot(
     payload = {
         "pattern_json": data_json,
         "title": "CP Generator",
-        "subtitle": _subtitle(sample_key, point_count),
+        "subtitle": _subtitle(point_count),
         "summary": _summary_text(merged, preview_diagnostic),
         "note": note,
         "point_count": point_count,
-        "sample_key": sample_key,
         "status": {
             "title": status_title,
             "message": status_message,
@@ -315,29 +297,12 @@ def _snapshot(
 
 def _build_preview(
     pattern: cp.CreasePattern,
-    *,
-    sample_key: str | None = None,
 ) -> tuple[
-    fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | fold_sim.ScriptedFoldedFigureModel | None,
+    fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | None,
     fold_sim.FoldSimulationDiagnostic,
     dict[str, object] | None,
 ]:
     assignment = pattern.analyze_assignments()
-    if sample_key == box_head_sample.BOX_HEAD_KEY:
-        model = fold_sim.build_box_head_figure(pattern.clone())
-        diagnostic = fold_sim.FoldSimulationDiagnostic(
-            status=cp.STATUS_WARNING,
-            face_count=getattr(model, "face_count", None),
-            uses_provisional_signs=getattr(model, "uses_provisional_signs", False),
-            uses_approximate_cycles=getattr(model, "uses_approximate_cycles", False),
-            cycle_drift=getattr(model, "cycle_drift", None),
-            crossing_fold_pairs=pattern.crossing_fold_pairs(),
-            message="The Box Head sample uses an authored 3D finish rather than a plain exact-fold certificate.",
-            preview_mode="scripted",
-            used_reference_pattern=False,
-        )
-        return model, diagnostic, _preview_payload(model, diagnostic)
-
     if not pattern.vertices:
         diagnostic = fold_sim.FoldSimulationDiagnostic(
             status=cp.STATUS_NOT_RUN,
@@ -418,7 +383,7 @@ def _build_preview(
 
 
 def _preview_payload(
-    model: fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | fold_sim.ScriptedFoldedFigureModel,
+    model: fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel,
     diagnostic: fold_sim.FoldSimulationDiagnostic,
 ) -> dict[str, object]:
     frames = []
@@ -580,9 +545,7 @@ def _diagnostic_payload(
     }
 
 
-def _subtitle(sample_key: str | None, point_count: int | None) -> str:
-    if sample_key == box_head_sample.BOX_HEAD_KEY:
-        return "Authored reference sample"
+def _subtitle(point_count: int | None) -> str:
     if point_count is None:
         return "Mobile crease studio"
     return f"{point_count}-point random study"

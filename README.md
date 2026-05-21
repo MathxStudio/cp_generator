@@ -4,10 +4,6 @@ A desktop application for generating, optimizing, and animating origami crease p
 
 ![Example output](assets/images/result.jpg)
 
-> **Credits:** `assets/images/box_head.png` is reconstructed from **"Box Head – 16×16 Grid"** by
-> **Boice** (Origami by Boice), designed for the East Bay Origami Convention 2024.
-> [Source](https://www.obb.design/crease-patterns/box-head---16x16-grid)
-
 ---
 
 ## Table of Contents
@@ -19,6 +15,7 @@ A desktop application for generating, optimizing, and animating origami crease p
 - [Windows launcher](#windows-launcher)
 - [Features](#features)
 - [Session files](#session-files)
+- [Batch save](#batch-save)
 - [Project layout](#project-layout)
 - [Android app](#android-app)
 - [Report](#report)
@@ -76,11 +73,11 @@ extract, and launch.
 
    ```bash
    # Linux
-   tar -xzf CPGenerator-linux.tar.gz
+   tar -xzf cp-generator-linux-portable.tar.gz
    ./CPGenerator/CPGenerator
 
    # macOS
-   unzip CPGenerator-macos.zip
+   unzip cp-generator-macos-portable.zip
    ./CPGenerator/CPGenerator
 
    # Windows — open CPGenerator\ and double-click CPGenerator.exe
@@ -95,7 +92,8 @@ extract, and launch.
 ## Build artifacts via GitHub Actions
 
 The main workflow file is `.github/workflows/build-artifacts.yml`. It runs
-automatically on every push, and can also be triggered manually.
+automatically on pushes to `main`, can also be triggered manually, and publishes
+versioned GitHub releases whenever a `v*` tag is pushed.
 Each successful run puts the desktop bundles and Android APK in one place.
 
 ### Trigger manually (no code push needed)
@@ -131,6 +129,7 @@ gh run watch <RUN_ID> --repo MathxStudio/cp_generator
 | **Archive** | Packs the directory into a platform-appropriate archive |
 | **Android** | Builds `app-debug.apk` with Gradle + Chaquopy on Ubuntu |
 | **Upload** | Attaches all desktop archives plus the Android APK as GitHub Actions artifacts (retained for 30 days) |
+| **Release** | On `v*` tags, renames the assets with the version and publishes a GitHub release automatically |
 
 ---
 
@@ -195,13 +194,16 @@ For more detail, see `android-app/README.md`.
 - Diagnostics that separate local admissibility, fold assignment, global consistency, and exact-preview status
 - Live animated 3D fold preview with kinematic face rotation
 - SVG and PNG export
-- Session save/load (`.cpfold.json`)
+- Unified save flow for numbered JSON sessions, duplex-ready A4 PDFs, or both at once
+- Session load (`.cpfold.json`)
 
 ---
 
 ## Session files
 
-Use the **Save** and **Load** buttons in the left panel to persist and restore:
+Use **Save** in the left panel to open the export dialog, and **Load** to restore a previous JSON session.
+
+JSON saves can persist and restore:
 
 - crease geometry and vertex positions
 - mountain/valley assignments
@@ -210,6 +212,22 @@ Use the **Save** and **Load** buttons in the left panel to persist and restore:
 
 Loading a saved session in a fresh launch fully restores the crease sheet and
 rebuilds the folded preview.
+
+## Batch save
+
+Use **Save** when you want a numbered export set. The dialog now supports three save modes:
+
+- **Current pattern**: save the active sheet immediately as JSON, a duplex-ready PDF, or both together with one shared numbered slot.
+- **Batch: current vertex count**: save the current sheet first, then search for more all-green patterns with the same current vertex count.
+- **Batch: vertex targets**: enter targets like `8-16:2`, `8,11,14`, or a mixed list, then request a fixed number of all-green results for each target.
+
+All save modes share the same naming and print rules:
+
+- names follow `cp-v<vertices>-00` through `cp-v<vertices>-99`
+- the lowest free number is always reused first for each vertex count
+- PDFs are written as two-page A4 portrait documents
+- page 1 is the front sheet, page 2 mirrors the crease pattern horizontally for duplex printing alignment
+- the printable layout removes all background washes and keeps only the border square, mountain folds, valley folds, and metadata beneath the sheet
 
 ---
 
@@ -222,13 +240,11 @@ cp_generator/
 │       ├── __main__.py      # package entrypoint
 │       ├── app.py           # Tkinter GUI and user interactions
 │       ├── core.py          # crease-pattern graph, optimization, MV assignment, export
+│       ├── exporting.py     # batch naming and printable PDF export
 │       ├── fold_sim.py      # 3D fold preview pipeline
-│       └── samples/
-│           └── box_head.py  # authored Box Head sample pattern
 ├── assets/
 │   ├── README.md
 │   └── images/
-│       ├── box_head.png
 │       └── result.jpg
 ├── android-app/
 │   ├── app/                 # native Android app module

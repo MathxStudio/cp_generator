@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cp-generator"
-version = "0.1.0"
+version = "0.2.0"
 description = "Desktop origami crease-pattern generator with diagnostics and 3D fold preview"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "cairosvg>=2.7.0",
     "numpy>=1.24.0",
+    "reportlab>=4.2.0",
     "scipy>=1.10.0",
     "svgwrite>=1.4.0",
 ]

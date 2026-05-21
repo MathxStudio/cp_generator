@@ -12,14 +12,14 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            archive_cmd: tar -czf CPGenerator-linux.tar.gz -C dist CPGenerator
-            archive_path: CPGenerator-linux.tar.gz
+            archive_cmd: tar -czf cp-generator-linux-portable.tar.gz -C dist CPGenerator
+            archive_path: cp-generator-linux-portable.tar.gz
           - os: windows-latest
-            archive_cmd: powershell -Command "Compress-Archive -Path dist/CPGenerator -DestinationPath CPGenerator-windows.zip -Force"
-            archive_path: CPGenerator-windows.zip
+            archive_cmd: powershell -Command "Compress-Archive -Path dist/CPGenerator -DestinationPath cp-generator-windows-portable.zip -Force"
+            archive_path: cp-generator-windows-portable.zip
           - os: macos-latest
-            archive_cmd: ditto -c -k --sequesterRsrc --keepParent dist/CPGenerator CPGenerator-macos.zip
-            archive_path: CPGenerator-macos.zip
+            archive_cmd: ditto -c -k --sequesterRsrc --keepParent dist/CPGenerator cp-generator-macos-portable.zip
+            archive_path: cp-generator-macos-portable.zip
 
     steps:
       - uses: actions/checkout@v4
