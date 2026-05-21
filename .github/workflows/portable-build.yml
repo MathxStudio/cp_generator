@@ -12,12 +12,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
             archive_cmd: tar -czf cp-generator-linux-portable.tar.gz -C dist CPGenerator
             archive_path: cp-generator-linux-portable.tar.gz
           - os: windows-latest
-            archive_cmd: powershell -Command "Compress-Archive -Path dist/CPGenerator -DestinationPath cp-generator-windows-portable.zip -Force"
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
+            archive_cmd: powershell -Command "Compress-Archive -Path dist/CPGenerator.exe -DestinationPath cp-generator-windows-portable.zip -Force"
             archive_path: cp-generator-windows-portable.zip
           - os: macos-latest
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
             archive_cmd: ditto -c -k --sequesterRsrc --keepParent dist/CPGenerator cp-generator-macos-portable.zip
             archive_path: cp-generator-macos-portable.zip
 
@@ -45,17 +48,7 @@ jobs:
         run: uv sync --all-groups
 
       - name: Freeze application
-        run: >
-          uv run pyinstaller
-          --noconfirm
-          --clean
-          --windowed
-          --onedir
-          --name CPGenerator
-          --hidden-import tkinter
-          --hidden-import tkinter.ttk
-          --collect-all scipy
-          src/cp_generator/__main__.py
+        run: ${{ matrix.freeze_cmd }}
 
       - name: Archive bundle
         run: ${{ matrix.archive_cmd }}

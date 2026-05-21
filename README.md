@@ -78,14 +78,14 @@ extract, and launch.
 
    # macOS
    unzip cp-generator-macos-portable.zip
-   ./CPGenerator/CPGenerator
+   ./CPGenerator
 
-   # Windows — open CPGenerator\ and double-click CPGenerator.exe
+   # Windows — unzip and double-click CPGenerator.exe
    ```
 
 > **macOS Gatekeeper:** the first launch may be blocked because the bundle
 > is unsigned. Right-click the binary → **Open** → **Open** to allow it, or run:
-> `xattr -d com.apple.quarantine CPGenerator/CPGenerator`
+> `xattr -d com.apple.quarantine ./CPGenerator`
 
 ---
 
@@ -125,8 +125,8 @@ gh run watch <RUN_ID> --repo MathxStudio/cp_generator
 | **System deps** | Installs `libcairo2` + `python3-tk` on Linux; `cairo` via Homebrew on macOS |
 | **Python** | Sets up Python 3.14 via `actions/setup-python` |
 | **uv** | Installs [uv](https://docs.astral.sh/uv/) and runs `uv sync --all-groups` to pin exact dependency versions from `uv.lock` |
-| **PyInstaller** | Freezes the app into a self-contained `dist/CPGenerator/` directory with `--onedir --windowed` |
-| **Archive** | Packs the directory into a platform-appropriate archive |
+| **PyInstaller** | Builds Linux as a self-contained folder bundle, and builds Windows/macOS as single-launchable `--onefile` outputs |
+| **Archive** | Packs the Linux folder and the single Windows/macOS launchables into platform-appropriate archives |
 | **Android** | Builds `app-debug.apk` with Gradle + Chaquopy on Ubuntu |
 | **Upload** | Attaches all desktop archives plus the Android APK as GitHub Actions artifacts (retained for 30 days) |
 | **Release** | On `v*` tags, renames the assets with the version and publishes a GitHub release automatically |
