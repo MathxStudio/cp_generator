@@ -35,7 +35,7 @@ refs/
 .release-notes-v*.md
 
 # Local image scratch files
-assets/images/*_bk.png
+# assets/images/*_bk.png
 
 # Local environments
 .venv/

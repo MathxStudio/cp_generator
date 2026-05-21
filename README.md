@@ -145,6 +145,7 @@ bash scripts/package_portable.sh
 ```
 
 The script:
+
 1. Triggers the `portable-build` workflow.
 2. Waits for it to finish (streams live progress).
 3. Downloads all three platform archives into `portable-dist/` in the current
