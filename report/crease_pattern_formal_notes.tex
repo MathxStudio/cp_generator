@@ -1,0 +1,681 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalize,nameinlink]{cleveref}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{proposition}[definition]{Proposition}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{theorem}[definition]{Theorem}
+\newtheorem{corollary}[definition]{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}[definition]{Remark}
+
+\newcommand{\RR}{\mathbb{R}}
+\newcommand{\ZZ}{\mathbb{Z}}
+\newcommand{\CP}{\mathcal{C}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1 \right\rvert}
+\newcommand{\set}[1]{\left\{ #1 \right\}}
+\newcommand{\odd}{\operatorname*{\sum\nolimits_{i\ \mathrm{odd}}}}
+\newcommand{\even}{\operatorname*{\sum\nolimits_{i\ \mathrm{even}}}}
+\newcommand{\Pass}{\mathrm{Pass}}
+\newcommand{\Fail}{\mathrm{Fail}}
+\newcommand{\Warn}{\mathrm{Warn}}
+\newcommand{\NotRun}{\mathrm{NotRun}}
+\newcommand{\Unknown}{\mathrm{Unknown}}
+
+\title{CP Generator: Formal Notes}
+\author{Allan Pan}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{The implemented mathematical object}
+
+The project works with a square sheet
+\[
+S=[0,s]^2,\qquad s>0,
+\]
+and with a finite straight-line graph drawn on that sheet. More precisely, the
+implemented state is a triple
+\[
+\CP=(G,X,\tau),
+\]
+where $G=(V,E)$ is a finite graph, $X\colon V\to S$ is an embedding, and
+\[
+\tau\colon E\to\set{-1,0,1}
+\]
+is a fold-label map, with $-1$ for ``unassigned'', $0$ for ``mountain'', and
+$1$ for ``valley''.
+
+\begin{definition}[Boundary and interior vertices]
+\[
+V_{\partial}=\set{v\in V:X_v\in\partial S},
+\qquad
+V_{\mathrm{int}}=V\setminus V_{\partial}.
+\]
+\end{definition}
+
+Every local theorem used by the program is expressed at interior vertices, so
+the distinction between $V_{\partial}$ and $V_{\mathrm{int}}$ is structural
+rather than cosmetic.
+
+\begin{definition}[Local angle data]
+For $v\in V_{\mathrm{int}}$, let
+\[
+d(v)=\deg_G(v).
+\]
+If the incident creases at $v$ are listed in cyclic order, then the
+corresponding sector angles are written
+\[
+\alpha_1(v),\dots,\alpha_{2m(v)}(v)\in(0,2\pi),
+\qquad
+\sum_{i=1}^{2m(v)}\alpha_i(v)=2\pi.
+\]
+\end{definition}
+
+\begin{definition}[Kawasaki residual and Maekawa balance]
+For $v\in V_{\mathrm{int}}$, define
+\[
+\kappa(v)
+=
+\max\!\left(
+\abs{\odd \alpha_i(v)-\pi},
+\abs{\even \alpha_i(v)-\pi}
+\right).
+\]
+If $\tau$ is complete at $v$, define
+\[
+M_\tau(v)=\#\set{e\ni v:\tau(e)=0},
+\qquad
+V_\tau(v)=\#\set{e\ni v:\tau(e)=1},
+\qquad
+\mu_\tau(v)=M_\tau(v)-V_\tau(v).
+\]
+\end{definition}
+
+\section{From random points to a planar candidate graph}
+
+The first stage of the project is purely geometric. One samples interior points
+\[
+P\subset (0,s)^2,
+\]
+adjoins the four corners of the square, and then projects points lying within a
+fixed threshold $\delta>0$ of the boundary onto $\partial S$. Thus one obtains
+\[
+P^\square=P\cup\set{(0,0),(s,0),(s,s),(0,s)},
+\qquad
+\widetilde P=\Pi_{\partial,\delta}(P^\square).
+\]
+
+The candidate graph is then taken from the Delaunay triangulation of
+$\widetilde P$:
+\[
+G_0=\operatorname{Del}(\widetilde P).
+\]
+After this, the code removes every edge lying entirely on one side of the
+square boundary. Therefore the implemented crease graph is
+\[
+E=E(G_0)\setminus E_{\partial},
+\]
+where
+\[
+E_{\partial}
+=
+\set{
+\set{u,v}\in E(G_0):
+X_u,X_v \text{ lie on one boundary side of }S
+}.
+\]
+
+This Delaunay stage is not itself a flat-foldability theorem. Its role is to
+provide a planar graph with reasonably regular local geometry so that the later
+angle constraints are numerically meaningful.
+
+\section{The local flat-foldability conditions}
+
+The next stage turns the geometric candidate graph into a constrained origami
+object by imposing the standard single-vertex necessary conditions.
+
+\begin{theorem}[Single-vertex necessary conditions {\cite{hull_math_flat}}]
+If $v\in V_{\mathrm{int}}$ is flat-foldable as a single-vertex crease pattern,
+then
+\[
+d(v)\in 2\ZZ,
+\qquad
+\odd \alpha_i(v)=\pi,
+\qquad
+\even \alpha_i(v)=\pi,
+\qquad
+\abs{\mu_\tau(v)}=2.
+\]
+\end{theorem}
+
+The optimizer in the code imposes only one alternating-angle equality per
+vertex, not two. This is sufficient, because the second equality is redundant.
+
+\begin{lemma}[Alternating-sum redundancy]
+If
+\[
+\sum_{i=1}^{2m}\alpha_i=2\pi,
+\]
+then
+\[
+\odd \alpha_i=\pi
+\Longleftrightarrow
+\even \alpha_i=\pi.
+\]
+\end{lemma}
+
+\begin{proof}
+Since
+\[
+\even \alpha_i = 2\pi-\odd \alpha_i,
+\]
+each equality implies the other.
+\end{proof}
+
+Accordingly, the project defines its local diagnostic predicate by
+\[
+\operatorname{Local}(\CP;\eps)
+\Longleftrightarrow
+\forall v\in V_{\mathrm{int}}\;
+\bigl(
+d(v)\in 2\ZZ
+\ \wedge\
+\kappa(v)\le \eps
+\bigr).
+\]
+This is the mathematical content of the program's \emph{local status}.
+
+\section{Parity repair before optimization}
+
+The first obstruction to local flat-foldability is odd degree. Let
+\[
+O(G)=\set{v\in V:d(v)\notin 2\ZZ}
+\]
+denote the odd-degree set. The implementation repairs parity by repeatedly
+deleting shortest paths between odd vertices.
+
+\begin{definition}[Implemented parity-repair step]
+Choose
+\[
+u\in O(G),
+\qquad
+w=\operatorname*{arg\,min}_{z\in O(G)\setminus\set{u}} d_G(u,z),
+\]
+and let
+\[
+\gamma=(u=v_0,v_1,\dots,v_k=w)
+\]
+be a shortest path from $u$ to $w$ in $G$. Replace $E$ by
+\[
+E\setminus \set{\set{v_{i-1},v_i}:1\le i\le k}.
+\]
+\end{definition}
+
+The reason this step is mathematically natural is that path deletion affects
+parity only at the endpoints.
+
+\begin{proposition}[Parity effect of one deletion]
+If the path $\gamma$ above is deleted, then
+\[
+\deg(v_i)\mapsto \deg(v_i)-2
+\qquad (1\le i\le k-1),
+\]
+and
+\[
+\deg(u)\mapsto \deg(u)-1,
+\qquad
+\deg(w)\mapsto \deg(w)-1.
+\]
+Hence the parity of every internal path vertex is preserved, while the parity
+of the endpoints flips.
+\end{proposition}
+
+\begin{proof}
+Each internal path vertex loses exactly two incident edges, and each endpoint
+loses exactly one.
+\end{proof}
+
+This proves that the repair has the intended local parity effect. It does not
+prove that the repaired graph is globally optimal in any stronger sense.
+
+\section{Weighted geometric repair via constrained optimization}
+
+Once parity has been repaired, the code moves the vertices as little as possible
+while imposing Kawasaki's identity at every interior vertex.
+
+Let $X^{(0)}=(X_v^{(0)})_{v\in V}$ denote the pre-optimization coordinates.
+Boundary motion is heavily penalized by weights
+\[
+w_v=
+\begin{cases}
+10^6,& v\in V_{\partial},\\
+1,& v\in V_{\mathrm{int}}.
+\end{cases}
+\]
+The weighted displacement functional is
+\[
+D(X)=\sum_{v\in V} w_v \norm{X_v-X_v^{(0)}}^2.
+\]
+
+The actual code minimizes
+\[
+F(X)=\frac{0.1}{2}D(X)^2.
+\]
+Since $D(X)\ge 0$, one has
+\[
+\arg\min F = \arg\min D.
+\]
+Thus the implementation still solves the nearest-feasible-geometry problem in
+the weighted least-squares sense.
+
+For each interior vertex $v$, define the constraint
+\[
+g_v(X)=\odd \alpha_i(v;X)-\pi.
+\]
+The implemented optimization problem is therefore
+\begin{equation}\label{eq:opt}
+\min_X F(X)
+\qquad
+\text{subject to}
+\qquad
+g_v(X)=0
+\quad
+\forall v\in V_{\mathrm{int}}.
+\end{equation}
+
+The solver is SLSQP. After the numerical solve, vertices within a small
+tolerance of the boundary are snapped back onto $\partial S$. In this way, the
+project passes from a merely planar sample to a planar sample constrained by
+the local angle theorem.
+
+\section{Mountain--valley search by Bern--Hayes-style local reduction}
+
+After geometric repair, the remaining local problem is to assign mountain and
+valley labels. The code does not search over all edge labelings directly.
+Instead, it first extracts local sign relations from smallest sectors, following
+the Bern--Hayes reduction idea {\cite{bern_hayes}}.
+
+For an interior vertex $v$, let
+\[
+e_1,\dots,e_r
+\]
+be the incident creases in cyclic order, and let
+\[
+\beta_1,\dots,\beta_r
+\]
+be the corresponding sector angles. The reduction repeatedly removes a locally
+minimal sector and records whether its two boundary creases must carry the same
+or opposite mountain--valley sign.
+
+\begin{definition}[Local reduction chain]
+The reduction at $v$ produces
+\[
+\Gamma_v=\bigl((f_1,\dots,f_k),(\eta_1,\dots,\eta_k)\bigr),
+\qquad
+\eta_i\in\set{0,1,2},
+\]
+where
+\[
+\eta_i=
+\begin{cases}
+0,& \tau(f_i)=1-\tau(f_{i-1}),\\
+1,& \tau(f_i)=\tau(f_{i-1}),\\
+2,& \tau(f_i)\text{ remains undetermined}.
+\end{cases}
+\]
+\end{definition}
+
+Boundary vertices are treated similarly, except that temporary virtual boundary
+rays are added so that the cyclic order closes. Thus the local reduction stage
+produces one or more chains of sign relations at every vertex.
+
+\section{Exact enumeration after chain merging}
+
+The local chains are then merged across shared creases. If the merged chains are
+\[
+\Lambda_1,\dots,\Lambda_g,
+\]
+then each $\Lambda_j$ contributes one free binary choice, namely the sign of
+its first crease. Therefore the remaining search space is
+\[
+\set{0,1}^g.
+\]
+
+For
+\[
+c=(c_1,\dots,c_g)\in\set{0,1}^g,
+\]
+the code propagates the implied signs along each chain:
+\[
+\tau_c(e_{j,1})=c_j,
+\]
+and then
+\[
+\eta_{j,i}=0 \Longrightarrow \tau_c(e_{j,i})=1-\tau_c(e_{j,i-1}),
+\]
+\[
+\eta_{j,i}=1 \Longrightarrow \tau_c(e_{j,i})=\tau_c(e_{j,i-1}),
+\]
+\[
+\eta_{j,i}=2 \Longrightarrow \tau_c(e_{j,i})=-1.
+\]
+
+This yields a partial or complete labeling $\tau_c$. The exact admissibility
+filter is Maekawa's theorem:
+\[
+\operatorname{Adm}(c)
+\Longleftrightarrow
+\forall v\in V_{\mathrm{int}}\;
+\abs{\mu_{\tau_c}(v)}=2.
+\]
+
+Among admissible choices, the code chooses the one maximizing an interlacing
+score
+\[
+\operatorname{Score}(c)
+=
+0.05\,\#\set{e\in E:\tau_c(e)\in\set{0,1}}
+\sum_{v\in V}\Phi_v(c),
+\]
+where $\Phi_v(c)$ rewards alternating mountain--valley patterns more than
+repeating ones, with sharper wedges weighted more heavily. This score is not a
+correctness condition; it is only a tie-breaker among already admissible
+assignments.
+
+\begin{proposition}[What the assignment search certifies]
+If the routine returns an assignment $\tau^\ast$, then
+\[
+\forall v\in V_{\mathrm{int}}\;
+\abs{\mu_{\tau^\ast}(v)}=2.
+\]
+If the routine returns failure, then no enumerated merged-group assignment
+satisfies Maekawa's theorem at every interior vertex.
+\end{proposition}
+
+\begin{proof}
+The code checks every seed choice in $\set{0,1}^g$, rejects every choice
+violating Maekawa, and returns only from the surviving set.
+\end{proof}
+
+\section{From local certificates to global geometry}
+
+At this point, the project has local angle control and a locally admissible
+mountain--valley labeling. The next question is global: whether the current
+straight-line embedding can be organized into coherent folded faces.
+
+The first global obstruction is crossing.
+
+\begin{definition}[Crossing predicate]
+For distinct nonincident edges $e,e'\in E$, define
+\[
+\operatorname{Cross}(e,e';X)
+\Longleftrightarrow
+X(e)\cap X(e')\ne\varnothing.
+\]
+Set
+\[
+\operatorname{Noncross}(X)
+\Longleftrightarrow
+\forall e\ne e' \in E,\quad
+e\cap e'=\varnothing
+\Longrightarrow
+\neg \operatorname{Cross}(e,e';X).
+\]
+\end{definition}
+
+If $\operatorname{Noncross}(X)$ fails, then no exact face-based folded preview
+is attempted on the current geometry.
+
+\section{Exact face extraction by half-edge tracing}
+
+Assume now that the current embedding is noncrossing. The code augments the fold
+graph by the four boundary edges of the square:
+\[
+E^\square = E \cup E_{\partial S}.
+\]
+At each vertex $v$, neighbors are ordered by polar angle around $X_v$. This
+induces a left-face successor rule on oriented edges.
+
+\begin{definition}[Left-face successor]
+For an oriented edge $(u,v)$, let
+\[
+\sigma(u,v)=(v,w),
+\]
+where $w$ is the predecessor of $u$ in the cyclic order around $v$.
+\end{definition}
+
+Starting from any half-edge and iterating $\sigma$ yields a closed walk or a
+failure. Every bounded counterclockwise closed walk is declared to be a face.
+Repeated vertices or nonclosing walks cause the exact solver to abort.
+
+Thus the code produces a finite face family
+\[
+\mathcal F.
+\]
+For each fold edge $e\in E$, one then computes its face-incidence set
+\[
+\operatorname{Inc}(e)=\set{f\in\mathcal F:e\subset\partial f}.
+\]
+The exact solver requires
+\[
+\abs{\operatorname{Inc}(e)}=2
+\qquad
+\forall e\in E.
+\]
+This is the precise global topological condition needed before reflection
+propagation can begin.
+
+\section{Reflection propagation and exact-current-geometry certification}
+
+Suppose every fold edge borders exactly two faces. The code chooses a root face
+\[
+f_0\in\mathcal F,
+\qquad
+\operatorname{area}(f_0)=\max_{f\in\mathcal F}\operatorname{area}(f),
+\]
+and sets
+\[
+T_{f_0}=I_3.
+\]
+
+If faces $f$ and $g$ share a fold line $\ell$, then the child transform is
+defined by reflection:
+\[
+T_g = R_\ell T_f.
+\]
+When a face is reached by two different reflection paths, the resulting
+transforms are compared on the vertices of that face.
+
+\begin{definition}[Cycle discrepancy]
+For a face $f$ and two candidate transforms $T,T'$, define
+\[
+\Delta(f;T,T')
+=
+\max_{v\in \operatorname{Vert}(f)}
+\norm{T(X_v)-T'(X_v)}.
+\]
+\end{definition}
+
+If
+\[
+\Delta(f;T,T') > \Delta_{\mathrm{hard}},
+\]
+then exact reconstruction fails. If
+\[
+\Delta_{\mathrm{soft}} < \Delta(f;T,T') \le \Delta_{\mathrm{hard}},
+\]
+then the reconstruction survives only at warning level.
+
+Fold signs are resolved from $\tau$ by
+\[
+\tau(e)=0 \Longrightarrow \operatorname{sgn}(e)=+1,
+\qquad
+\tau(e)=1 \Longrightarrow \operatorname{sgn}(e)=-1.
+\]
+If a fold remains unassigned, the exact solver fills its sign provisionally by a
+face-depth rule; this also downgrades the output to warning level.
+
+\begin{theorem}[Exact-current-geometry certificate]
+If the project reports
+\[
+\operatorname{Status}_{\mathrm{global}}(\CP)=\Pass
+\qquad\text{and}\qquad
+\operatorname{Status}_{\mathrm{preview}}(\CP)=\Pass,
+\]
+then
+\[
+\operatorname{Noncross}(X),
+\qquad
+\abs{\operatorname{Inc}(e)}=2 \ \forall e\in E,
+\qquad
+\Delta(f;T,T')\le \Delta_{\mathrm{soft}}
+\]
+for every cycle comparison, and no provisional fold signs were used.
+\end{theorem}
+
+\begin{proof}
+Each clause is the negation of one of the exact solver's failure or warning
+branches. A pass can occur only if every one of those branches is avoided.
+\end{proof}
+
+This theorem describes the strongest global statement currently certified by the
+code. It is a theorem about the \emph{current embedding}, not a complete
+classification theorem for all embeddings with the same combinatorics.
+
+\section{3D folding and fallback preview}
+
+Once exact face reconstruction is available, the project builds a kinematic 3D
+folding by propagating rotations along the face-adjacency tree. If a crease $e$
+has axis $(p,q)$ and sign $\operatorname{sgn}(e)\in\set{\pm1}$, then the
+3-dimensional transform satisfies
+\[
+T_g^{(3D)}
+=
+R_{(p,q)}\!\bigl(\operatorname{sgn}(e)\theta\bigr)T_f^{(3D)}.
+\]
+This rigid-hinge viewpoint is the standard rigid-plate abstraction used for the
+preview stage; compare the rigid-origami literature {\cite{abel_rigid}}.
+
+If exact face reconstruction fails, the project falls back to a triangle-mesh
+preview. In that mode the domain is triangulated and propagated along a tree of
+triangle adjacencies. This is still useful visually, but it is intentionally
+marked as non-certifying.
+
+\section{Status predicates}
+
+The four displayed statuses are designed to keep the local and global
+statements separate.
+
+\begin{definition}[Implemented status semantics]
+\[
+\operatorname{Status}_{\mathrm{local}}(\CP)
+=
+\begin{cases}
+\Pass,& \operatorname{Local}(\CP;\eps),\\
+\Fail,& \text{otherwise},
+\end{cases}
+\]
+\[
+\operatorname{Status}_{\mathrm{assign}}(\CP)
+=
+\begin{cases}
+\Fail,& \exists v\in V_{\mathrm{int}}:\abs{\mu_\tau(v)}\ne 2
+\text{ with complete local assignment data},\\
+\NotRun,& \forall e\in E:\tau(e)=-1,\\
+\Warn,& \exists e\in E:\tau(e)=-1 \text{ and some assignments exist},\\
+\Pass,& \operatorname{Assign}(\CP),
+\end{cases}
+\]
+\[
+\operatorname{Status}_{\mathrm{global}}(\CP)
+=
+\begin{cases}
+\Fail,& \neg\operatorname{Noncross}(X),\\
+\NotRun,& E=\varnothing,\\
+\Unknown,& \operatorname{Status}_{\mathrm{assign}}(\CP)=\NotRun,\\
+\Pass,\Warn,\Fail,& \text{exact-current-geometry solver output},
+\end{cases}
+\]
+\[
+\operatorname{Status}_{\mathrm{preview}}(\CP)
+=
+\begin{cases}
+\NotRun,& \text{no preview attempt admissible},\\
+\Pass,\Warn,\Fail,& \text{preview solver output}.
+\end{cases}
+\]
+\end{definition}
+
+\section{Scope and limitations}
+
+The project combines rigorous local constraints with a partly rigorous and
+partly heuristic global pipeline. The following distinctions are therefore
+essential.
+
+\begin{itemize}
+    \item The shortest-path parity repair is an implemented heuristic, not an
+    optimality theorem.
+    \item The Bern--Hayes-style wedge reduction is a local sign-reduction
+    device derived from {\cite{bern_hayes}}, not a complete multi-vertex
+    flat-foldability classifier.
+    \item The exact face-reflection solver certifies the current embedding when
+    it passes, but the mesh fallback is only a guarded visualization.
+    \item Warning-level outputs indicate exactly where the code leaves the realm
+    of strict certification.
+\end{itemize}
+
+\begin{theorem}[Implemented scope]
+The current pipeline is not a complete decision procedure for arbitrary
+multi-vertex global flat-foldability.
+\end{theorem}
+
+\begin{proof}
+The claim follows from the coexistence of heuristic parity repair, local-only
+sign reduction, and explicit mesh/reference fallbacks in the preview stage.
+\end{proof}
+
+\begin{thebibliography}{99}
+
+\bibitem{bern_hayes}
+Marshall Bern and Barry Hayes.
+\newblock \emph{The Complexity of Flat Origami}.
+\newblock SODA, 1996.
+
+\bibitem{hull_math_flat}
+Thomas C. Hull.
+\newblock \emph{On the Mathematics of Flat Origamis}.
+\newblock Congressus Numerantium, 1994.
+
+\bibitem{abel_rigid}
+Zachary Abel, Jason Cantarella, Erik D. Demaine, David Eppstein, Thomas C.
+Hull, Jason S. Ku, Robert J. Lang, and Tomohiro Tachi.
+\newblock \emph{Rigid Origami Vertices: Conditions and Forcing Sets}.
+\newblock Journal of Computational Geometry, 2017.
+
+\bibitem{eppstein_flat}
+David Eppstein.
+\newblock \emph{A Parameterized Algorithm for Flat Folding}.
+\newblock arXiv:2306.11939, 2023.
+
+\bibitem{hull_zakharevich}
+Thomas C. Hull and Inna Zakharevich.
+\newblock \emph{Flat Origami Is Turing Complete}.
+\newblock arXiv:2309.07932, version consulted in 2025.
+
+\bibitem{walker_stankovic}
+Andreas Walker and Tino Stankovi\'c.
+\newblock \emph{Algorithmic Design of Origami Mechanisms and Tessellations}.
+\newblock Communications Materials, 2022.
+
+\end{thebibliography}
+
+\end{document}

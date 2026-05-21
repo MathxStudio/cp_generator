@@ -31,9 +31,11 @@
 \setbeamerfont{frametitle}{size=\large,series=\bfseries}
 
 \newcommand{\RR}{\mathbb{R}}
+\newcommand{\ZZ}{\mathbb{Z}}
 \newcommand{\CP}{\mathcal{C}}
 \newcommand{\eps}{\varepsilon}
 \newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1\right\rvert}
 
 \title{\textbf{CP Generator}}
 \subtitle{Generation, Diagnostics, and Animation of Origami Crease Patterns}
@@ -78,6 +80,48 @@ on a square sheet — entirely from scratch.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Mathematical model of the program state}
+\begin{columns}[T,onlytextwidth]
+\column{0.54\textwidth}
+\begin{block}{Current object}
+\small
+\[
+\begin{aligned}
+\CP&=(G,X,\tau),\qquad G=(V,E),\\
+X&:V\to [0,s]^2,\qquad \tau:E\to\{U,M,V\}.
+\end{aligned}
+\]
+\[
+V_{\mathrm{int}}=\{v\in V:X_v\notin \partial[0,s]^2\}.
+\]
+At each \(v\in V_{\mathrm{int}}\), the incident creases are listed in cyclic
+order, with sector angles
+\[
+\alpha_1(v),\dots,\alpha_{2m(v)}(v),\qquad
+\sum_i\alpha_i(v)=2\pi.
+\]
+\end{block}
+
+\column{0.42\textwidth}
+\begin{alertblock}{Two vertexwise quantities}
+\small
+\[
+\kappa(v)=\left|\sum_{i\text{ odd}}\alpha_i(v)-\pi\right|
+\]
+measures Kawasaki error, while
+\[
+\mu_\tau(v)=M_\tau(v)-V_\tau(v)
+\]
+measures Maekawa balance after MV assignment.
+\end{alertblock}
+
+\smallskip
+\small The pipeline constructs \(G\), improves \(X\), searches for \(\tau\),
+then certifies as much global geometry as the code can justify.
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm I — Planar candidate graph}
 \textbf{Goal.} A planar graph dense enough for interesting folds, regular
 enough for stable local angle computation.
@@ -89,15 +133,17 @@ enough for stable local angle computation.
 \begin{enumerate}\small
   \item Sample interior points; add four corners.
   \item Snap near-boundary points to the boundary.
-  \item Compute the Delaunay triangulation.
-  \item Use its edges as the initial crease graph.
+  \item Compute \(G_0=\operatorname{Del}(\widetilde P)\).
+  \item Delete edges lying entirely on one boundary side.
+  \item Use the remaining straight-line edges as \(E\).
 \end{enumerate}
 \end{block}
 
 \column{0.42\textwidth}
-\textbf{Why Delaunay?}\\[3pt]
-\small No other input point lies inside the circumcircle of any triangle —
-avoids skinny triangles and gives clean local angle data.
+\textbf{Mathematical role}\\[3pt]
+\small Delaunay does not prove foldability. It supplies a planar candidate
+graph with relatively regular local geometry, so the cyclic order and sector
+angles used later are numerically stable.
 \end{columns}
 \end{frame}
 
@@ -110,11 +156,12 @@ Every interior vertex must have \alert{even degree}:
 \(d(v)\equiv 0\pmod 2.\)
 \end{alertblock}
 \smallskip
-\small\textbf{Repair.} Pair odd-degree vertices; delete the shortest path
-between each pair. \textcolor{cpmid}{(Heuristic — not globally optimal.)}
+\small\textbf{Repair.} Pair odd-degree vertices and delete a shortest path
+between each pair. Only the endpoint parities flip.
+\textcolor{cpmid}{(Heuristic — not globally optimal.)}
 
 \column{0.48\textwidth}
-\begin{block}{Kawasaki's theorem (local)}
+\begin{block}{Kawasaki's theorem (local) \cite{hull_math_flat}}
 Sector angles \(\alpha_1,\dots,\alpha_{2m}\) must satisfy
 \[
 \alpha_1+\alpha_3+\cdots = \alpha_2+\alpha_4+\cdots = \pi.
@@ -128,14 +175,16 @@ Move vertices as little as possible, subject to the Kawasaki constraints:
 \[
 \min_{X}\;D(X)+\frac{\alpha}{2}\,D(X)^{2},
 \]
-Boundary weights \(w_v\) are large; interior weights are small. Solved with SLSQP.
+with one alternating-angle equality per vertex, since the other follows from
+\(\sum_i\alpha_i=2\pi\). Large boundary weights and small interior weights keep
+the square nearly fixed. Solved with SLSQP.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm III — Local constraints: Maekawa \& Bern--Hayes}
 \begin{columns}[T,onlytextwidth]
 \column{0.46\textwidth}
-\begin{block}{Maekawa's theorem (local)}
+\begin{block}{Maekawa's theorem (local) \cite{hull_math_flat}}
 At every interior vertex,
 \[
 M(v)-V(v)=\pm 2.
@@ -145,7 +194,7 @@ this anywhere.
 \end{block}
 
 \column{0.50\textwidth}
-\textbf{Bern--Hayes-style reduction}\\[4pt]
+\textbf{Bern--Hayes-style reduction \cite{bern_hayes}}\\[4pt]
 For each vertex, repeatedly \alert{remove the smallest sector}: its two
 bounding creases are forced \emph{equal} or \emph{opposite} in sign.
 \smallskip
@@ -171,7 +220,7 @@ Each vertex reduction yields sign chains:
 \begin{itemize}\small
   \item Merge chains across shared creases into \(g\) free groups.
   \item Enumerate all \(2^g\) seed assignments; propagate implied signs.
-  \item Keep only assignments that pass Maekawa at every vertex.
+  \item Keep only assignments with \(\abs{M(v)-V(v)}=2\) at every interior vertex.
 \end{itemize}
 \textcolor{cpmid}{\small Undetermined creases keep label \(-1\); no sign is invented.}
 
@@ -189,8 +238,13 @@ Each vertex reduction yields sign chains:
 \begin{columns}[T,onlytextwidth]
 \column{0.48\textwidth}
 \textbf{Face extraction}\\[4pt]
-\small Trace half-edges in order; each bounded counterclockwise cycle defines one face.
-Faces are then triangulated by ear clipping for rendering.
+\small Add the square boundary, order neighbors by polar angle, and trace
+half-edges by the left-face rule
+\[
+(u,v)\mapsto(v,w),
+\]
+where \(w\) is the predecessor of \(u\) in the cyclic order at \(v\). Each
+bounded counterclockwise cycle defines one face.
 
 \medskip
 \begin{block}{Reflection rule}
@@ -200,15 +254,15 @@ the method falls back to per-triangle propagation along a spanning tree.
 \end{block}
 
 \column{0.48\textwidth}
-\textbf{Kinematic animation}\\[4pt]
+\textbf{Kinematic animation \cite{abel_rigid}}\\[4pt]
 Around crease axis \((p,q)\), with sign \(\sigma(e)\in\{\pm 1\}\) and fold
 angle \(\theta\):
 \[
 T_{\text{child}} = R_{(p,q)}\!\bigl(\sigma(e)\,\theta\bigr)\,T_{\text{parent}}.
 \]
-\small Rigid plates connected by hinge creases — no elasticity, no collisions.
-Near the fully folded state, small offsets along the surface normal keep
-layer order visible.
+\small Rigid plates connected by hinge creases: no elasticity, no collisions.
+Triangulation is only for rendering, and small normal offsets keep layers
+visible near full closure.
 \end{columns}
 \end{frame}
 
@@ -235,22 +289,58 @@ be the Kawasaki residual at \(v\), where \(\alpha_1(v),\dots,\alpha_{2m(v)}(v)\)
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{What each pass actually certifies}
+\begin{columns}[T,onlytextwidth]
+\column{0.48\textwidth}
+\begin{block}{Local and assignment passes}
+\footnotesize
+\[
+\forall v\in V_{\mathrm{int}},\quad
+d(v)\in 2\ZZ,\qquad
+\kappa(v)\le \eps,
+\]
+and, after a complete assignment,
+\[
+\forall v\in V_{\mathrm{int}},\quad
+\abs{M_\sigma(v)-V_\sigma(v)}=2.
+\]
+This is a certificate of \emph{vertexwise admissibility}, not of a global flat
+fold.
+\end{block}
+
+\column{0.48\textwidth}
+\begin{alertblock}{Global and exact-preview passes}
+\footnotesize
+These certify properties of the \emph{current embedding}: noncrossing creases,
+closed traced faces, two-sided face incidence on each fold, and cycle-consistent
+reflection propagation, with no provisional MV completion.
+\end{alertblock}
+
+\smallskip
+\footnotesize The deck therefore separates ``locally admissible'' from
+``globally certified current geometry'' as distinct mathematical statements.
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm VI — Implemented global-consistency test}
 \footnotesize The current code does \emph{not} solve arbitrary global flat-foldability. It implements the following certifier on the current embedding \(X\):
 
 \begin{block}{Implemented decision procedure}
 \begin{enumerate}\footnotesize
-  \item If nonincident fold segments cross, return \(\texttt{fail}\). If there are no folds, return \(\texttt{not\_run}\). If no MV assignment has been attempted, return \(\texttt{unknown}\).
+  \item If nonincident fold segments cross, return \(\texttt{fail}\). If there are no folds, return \(\texttt{not\_run}\). If no MV search has been attempted, return \(\texttt{unknown}\).
   \item Augment the fold graph by the square boundary, and order neighbors at each vertex by polar angle.
-  \item Trace bounded faces by the left-face rule \((u,v)\mapsto(v,w)\), where \(w\) is the predecessor of \(u\) in the cyclic order at \(v\). Reject repeated vertices or nonclosing walks.
-  \item Require every fold edge to border exactly two traced faces. Build the face-adjacency graph, choose a maximal-area root face, and set \(T_{f_0}=I\).
-  \item Across each crease \(\ell\), propagate \(T_g=R_{\ell}T_f\). On revisiting a face, compare the competing transforms: hard discrepancy gives \(\texttt{fail}\), soft discrepancy gives \(\texttt{warning}\).
-  \item Resolve fold signs from \(\tau\). Any missing sign is filled provisionally by face-depth parity, which downgrades the outcome to \(\texttt{warning}\).
+  \item Trace bounded faces by \((u,v)\mapsto(v,w)\), with \(w\) the predecessor of \(u\) in the cyclic order at \(v\). Reject repetition or nonclosure.
+  \item Require every fold edge to border exactly two traced faces. Build the face graph, choose a maximal-area root face, and set \(T_{f_0}=I\).
+  \item Across each crease \(\ell\), propagate \(T_g=R_{\ell}T_f\). Hard cycle drift gives \(\texttt{fail}\); soft drift gives \(\texttt{warning}\).
+  \item Resolve fold signs from \(\tau\). Missing signs are provisionally filled by face-depth parity, which downgrades to \(\texttt{warning}\).
 \end{enumerate}
 \end{block}
 
 \begin{alertblock}{Output interpretation}
-\footnotesize A final \(\texttt{pass}\) means: no crossings, successful exact face tracing, two-sided incidence for every fold, cycle-consistent reflections within tolerance, and no provisional MV completion. This is the strongest global certificate currently implemented in the code.
+\footnotesize A final \(\texttt{pass}\) means: no crossings, successful exact
+face tracing, two-sided incidence on every fold, cycle-consistent reflections
+within tolerance, and no provisional MV completion.
 \end{alertblock}
 \end{frame}
 
@@ -260,12 +350,13 @@ be the Kawasaki residual at \(v\), where \(\alpha_1(v),\dots,\alpha_{2m(v)}(v)\)
 If a single-vertex crease pattern flat-folds, then its degree is even, its sector angles satisfy Kawasaki's alternating-sum identity, and every complete MV assignment satisfies Maekawa's relation \(|M-V|=2\). \textcolor{cpmid}{\cite{hull_math_flat}}
 \end{theorem}
 
-\begin{proof}[Interpretation in this project]
-\footnotesize The implemented \emph{local status} and \emph{assignment status} test these vertexwise necessary conditions, up to numerical tolerance \(\eps\). Bern--Hayes reduction is used only to derive local sign constraints and shrink the search over complete assignments \(\sigma\); it does not decide global flat-foldability for a multi-vertex pattern. Hence a pass certifies \emph{local admissibility}, not a global folding. \textcolor{cpmid}{\cite{hull_math_flat,bern_hayes}}
-\end{proof}
-
 \begin{block}{Why this distinction matters}
-\footnotesize Hull's theorem is local, while Bern--Hayes shows that exact flat foldability becomes globally difficult once many vertices interact. The report therefore keeps ``locally admissible assignment'' and ``globally certified current geometry'' separate. \textcolor{cpmid}{\cite{bern_hayes}}
+\footnotesize The implemented \emph{local status} and \emph{assignment status}
+test these vertexwise conditions up to numerical tolerance \(\eps\).
+Bern--Hayes only derives local sign constraints and shrinks the search over
+\(\sigma\); it does not decide global flat-foldability. The deck therefore
+keeps ``locally admissible assignment'' and ``globally certified current
+geometry'' separate. \textcolor{cpmid}{\cite{bern_hayes}}
 \end{block}
 \end{frame}
 
@@ -275,16 +366,58 @@ If a single-vertex crease pattern flat-folds, then its degree is even, its secto
 If the algorithm on the previous slide returns \emph{global status = pass} and \emph{exact-preview status = pass}, then the current embedding of \(\CP\) has a noncrossing augmented planar graph, a closed family of bounded traced faces, a two-face incidence relation on every fold edge, and a cycle-consistent family of flat reflections \(T_g=R_{\ell}T_f\), all without provisional completion of the MV data.
 \end{theorem}
 
-\begin{proof}[Why this theorem is faithful to the code]
+\begin{block}{Why this theorem matches the code}
 \footnotesize
 \begin{enumerate}\itemsep2pt
-  \item `src/cp_generator/core.py` first rejects nonincident segment crossings.
-  \item `fold\_sim.py` then traces bounded faces by cyclic half-edge traversal and aborts on repetition or nonclosure.
-  \item The exact solver requires exactly two incident faces per fold and propagates transforms by explicit crease reflections.
-  \item Cycle drift beyond tolerance aborts; smaller drift or provisional sign completion downgrades to warning rather than pass.
+  \item The core checker first rejects nonincident segment crossings.
+  \item The fold simulator traces bounded faces by cyclic half-edge traversal and aborts on repetition or nonclosure.
+  \item The exact solver requires two incident faces per fold and propagates transforms by explicit crease reflections.
+  \item Cycle drift beyond tolerance aborts; provisional sign completion downgrades pass to warning.
 \end{enumerate}
-Thus the theorem states exactly what the present code certifies. It is not yet a complete decision procedure for arbitrary multi-vertex flat-foldability, but it is consistent with the formal viewpoint that valid flat foldings require noncrossing geometry and coherent global compatibility data. \textcolor{cpmid}{\cite{hull_zakharevich,eppstein_flat}}
-\end{proof}
+\end{block}
+
+\footnotesize This is therefore a theorem about the \emph{current geometry
+seen by the code}, not a complete decision procedure for arbitrary multi-vertex
+flat-foldability. \textcolor{cpmid}{\cite{hull_zakharevich,eppstein_flat}}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{The whole mathematical picture}
+\begin{block}{Pipeline as one implication chain}
+\footnotesize
+\[
+\text{sample points}
+\Longrightarrow
+\text{planar candidate graph}
+\Longrightarrow
+\text{even-degree repair}
+\Longrightarrow
+\text{small Kawasaki residual}
+\]
+\[
+\Longrightarrow
+\text{locally admissible MV constraints}
+\Longrightarrow
+\text{exact search over sign groups}
+\Longrightarrow
+\text{current assignment } \sigma
+\]
+\[
+\Longrightarrow
+\text{face extraction}
+\Longrightarrow
+\text{reflection compatibility}
+\Longrightarrow
+\text{exact or warning-level preview}.
+\]
+\end{block}
+
+\begin{alertblock}{Rigorous interpretation}
+\footnotesize Every arrow above is implemented in the code. The early arrows
+are geometric construction and local necessary conditions; the later arrows
+certify only the \emph{current geometry}. No claim here is a complete decision
+procedure for arbitrary multi-vertex flat-foldability.
+\end{alertblock}
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
