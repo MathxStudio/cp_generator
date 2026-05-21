@@ -12,6 +12,7 @@ crease_pattern.svg
 crease_pattern_methods.pdf
 exports/
 output/
+examples/sessions/
 
 # Personal session state
 fold_session*.cpfold*.json
@@ -19,12 +20,22 @@ fold_session*.cpfold*.json
 # AI / editor config
 .claude/
 .codex
+.agents/
 SKILL.md
+skills-lock.json
 
 # Planning notes
 ORIGAMI_THEORY_TODO.md
 PHASE1_DIAGNOSTICS_SPEC.md
 refs/
+
+# Local release staging
+.release-assets/
+.release-publish/
+.release-notes-v*.md
+
+# Local image scratch files
+assets/images/*_bk.png
 
 # Local environments
 .venv/

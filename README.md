@@ -2,7 +2,7 @@
 
 A desktop application for generating, optimizing, and animating origami crease patterns. Starting from a random point set, it builds a Delaunay candidate graph, enforces local flat-fold conditions (Kawasaki and Maekawa), assigns mountain/valley folds, and renders a live animated 3D fold preview — all inside a single Tkinter window.
 
-![Example output](assets/images/result.jpg)
+![Tkinter app window](assets/images/tkinter-window.png)
 
 ---
 
