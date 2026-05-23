@@ -1303,7 +1303,7 @@ private data class RenderFace(
 )
 
 data class UpdateUiState(
-    val currentVersion: String = "0.2.1",
+    val currentVersion: String = "0.3.0",
     val latestVersion: String? = null,
     val message: String = "Check the release channel when you want to look for a newer APK.",
     val tone: String = "neutral",
@@ -1594,9 +1594,9 @@ private class AppUpdateRepository(
     fun currentVersionName(): String {
         return try {
             @Suppress("DEPRECATION")
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.2.1"
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.3.0"
         } catch (_: Exception) {
-            "0.2.1"
+            "0.3.0"
         }
     }
 

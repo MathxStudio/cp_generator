@@ -1,0 +1,57 @@
+{
+  "fold_assignment_ready": true,
+  "format": "cp-generator-session",
+  "pattern": {
+    "folds": [
+      {
+        "type": 0,
+        "v1": 0,
+        "v2": 1
+      },
+      {
+        "type": 0,
+        "v1": 0,
+        "v2": 2
+      },
+      {
+        "type": 1,
+        "v1": 0,
+        "v2": 3
+      },
+      {
+        "type": 1,
+        "v1": 0,
+        "v2": 4
+      }
+    ],
+    "side": 10.0,
+    "vertices": [
+      {
+        "x": 5.0,
+        "y": 5.0
+      },
+      {
+        "x": 0.0,
+        "y": 0.0
+      },
+      {
+        "x": 10.0,
+        "y": 0.0
+      },
+      {
+        "x": 10.0,
+        "y": 10.0
+      },
+      {
+        "x": 0.0,
+        "y": 10.0
+      }
+    ]
+  },
+  "point_count": "0",
+  "preview_edge_families": false,
+  "preview_loop": true,
+  "preview_reference_pattern": null,
+  "show_labels": false,
+  "version": 1
+}

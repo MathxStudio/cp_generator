@@ -39,6 +39,7 @@ refs/
 
 # Local environments
 .venv/
+.wheel-smoke/
 uv.exe
 uv.zip
 

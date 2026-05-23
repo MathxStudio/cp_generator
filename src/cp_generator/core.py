@@ -59,6 +59,9 @@ class GlobalDiagnostic:
     crossing_fold_pairs: tuple[tuple[int, int], ...] = ()
     face_count: int | None = None
     message: str = ""
+    basis: str = "local_only"
+    method: str = "local_only"
+    heuristic_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

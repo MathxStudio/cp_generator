@@ -24,6 +24,10 @@ workflow artifacts. That means:
 - the updater expects a published release containing an `.apk` asset
 - for real upgrade continuity between installed versions, that release APK should be signed consistently
 
+Right now, GitHub Actions only uploads the **debug** APK as a workflow artifact.
+Tagged GitHub Releases intentionally skip Android APK publication until a
+consistently signed release build is configured.
+
 ## Local build
 
 1. Open `android-app/` in Android Studio.

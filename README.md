@@ -9,6 +9,8 @@ A desktop application for generating, optimizing, and animating origami crease p
 ## Table of Contents
 
 - [Run from source](#run-from-source)
+- [Validation and diagnostics](#validation-and-diagnostics)
+- [Project housekeeping](#project-housekeeping)
 - [Run a pre-built portable bundle](#run-a-pre-built-portable-bundle)
 - [Build artifacts via GitHub Actions](#build-artifacts-via-github-actions)
 - [Download artifacts with the helper script](#download-artifacts-with-the-helper-script)
@@ -56,6 +58,32 @@ cp-generator
 
 ---
 
+## Validation and diagnostics
+
+The project now ships with a checked-in validation corpus and a bounded
+small-instance exact checker for research and regression work.
+
+```bash
+# run the Python test suite
+uv run python -m unittest discover -s tests -t . -q
+
+# run the validation corpus and fail if any case drifts
+uv run cp-generator-diagnostics --fail-on-mismatch
+```
+
+The diagnostic report distinguishes between **certified** results
+(local checks, Maekawa checks, crossing detection, exact face reconstruction)
+and **heuristic** ones (mesh fallback, reference-geometry fallback,
+provisional signs, approximate cycle closure).
+
+## Project housekeeping
+
+- Contributor workflow: `CONTRIBUTING.md`
+- Security reporting: `SECURITY.md`
+- Release history: `CHANGELOG.md`
+
+---
+
 ## Run a pre-built portable bundle
 
 Pre-built bundles are attached as artifacts to every successful `build-artifacts`
@@ -93,8 +121,10 @@ extract, and launch.
 
 The main workflow file is `.github/workflows/build-artifacts.yml`. It runs
 automatically on pushes to `main`, can also be triggered manually, and publishes
-versioned GitHub releases whenever a `v*` tag is pushed.
-Each successful run puts the desktop bundles and Android APK in one place.
+versioned GitHub desktop releases whenever a `v*` tag is pushed.
+Each successful run puts the desktop bundles and Android debug APK in one place
+as workflow artifacts. Tagged GitHub Releases intentionally publish **desktop**
+assets only until a consistently signed Android release path is configured.
 
 ### Trigger manually (no code push needed)
 
@@ -127,9 +157,9 @@ gh run watch <RUN_ID> --repo MathxStudio/cp_generator
 | **uv** | Installs [uv](https://docs.astral.sh/uv/) and runs `uv sync --all-groups` to pin exact dependency versions from `uv.lock` |
 | **PyInstaller** | Builds Linux as a self-contained folder bundle, and builds Windows/macOS as single-launchable `--onefile` outputs |
 | **Archive** | Packs the Linux folder and the single Windows/macOS launchables into platform-appropriate archives |
-| **Android** | Builds `app-debug.apk` with Gradle + Chaquopy on Ubuntu |
-| **Upload** | Attaches all desktop archives plus the Android APK as GitHub Actions artifacts (retained for 30 days) |
-| **Release** | On `v*` tags, renames the assets with the version and publishes a GitHub release automatically |
+| **Android** | Builds `app-debug.apk` with Gradle + Chaquopy on Ubuntu for testing artifacts |
+| **Upload** | Attaches all desktop archives plus the Android debug APK as GitHub Actions artifacts (retained for 30 days) |
+| **Release** | On `v*` tags, verifies version metadata first, then publishes desktop release assets automatically |
 
 ---
 
@@ -146,9 +176,9 @@ bash scripts/package_portable.sh
 
 The script:
 
-1. Triggers the `portable-build` workflow.
+1. Triggers the `build-artifacts` workflow.
 2. Waits for it to finish (streams live progress).
-3. Downloads all three platform archives into `portable-dist/` in the current
+3. Downloads the workflow artifacts into `portable-dist/` in the current
    directory.
 
 ---
