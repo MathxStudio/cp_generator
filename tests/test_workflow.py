@@ -147,22 +147,40 @@ class GeometryQualityTests(unittest.TestCase):
         self.assertLess(quality.min_vertex_distance, quality.threshold)
         self.assertEqual(quality.closest_vertex_pair, (4, 5))
 
+    def test_geometry_quality_flags_nearly_collinear_triple(self) -> None:
+        pattern = _pattern_from_vertices(
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (0.2, 0.35),
+            (0.5, 0.42505),
+            (0.8, 0.5),
+        )
+
+        quality = workflow.geometry_quality(pattern)
+
+        self.assertFalse(quality.generic)
+        self.assertIsNotNone(quality.min_triangle_height)
+        self.assertLess(quality.min_triangle_height, quality.threshold)
+        self.assertEqual(quality.most_collinear_triple, (4, 5, 6))
+
     def test_build_pattern_retries_past_near_degenerate_generation(self) -> None:
         degenerate = _pattern_from_vertices(
             (0.0, 0.0),
             (1.0, 0.0),
             (1.0, 1.0),
             (0.0, 1.0),
-            (0.25, 0.25),
-            (0.2501, 0.2501),
+            (0.25, 0.3),
+            (0.2501, 0.3001),
         )
         generic = _pattern_from_vertices(
             (0.0, 0.0),
             (1.0, 0.0),
             (1.0, 1.0),
             (0.0, 1.0),
-            (0.25, 0.25),
-            (0.75, 0.75),
+            (0.25, 0.3),
+            (0.72, 0.79),
         )
 
         with mock.patch(
@@ -174,19 +192,45 @@ class GeometryQualityTests(unittest.TestCase):
         self.assertTrue(workflow.is_generic_geometry(pattern))
         self.assertEqual(build_once.call_count, 2)
 
+    def test_sample_interior_vertex_rejects_close_and_collinear_candidates(self) -> None:
+        existing = [
+            (0.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 100.0),
+            (0.0, 100.0),
+            (50.0, 60.0),
+        ]
+
+        with mock.patch(
+            "cp_generator.workflow.random.uniform",
+            side_effect=[
+                50.05,
+                60.05,
+                50.0,
+                50.0,
+                30.0,
+                73.0,
+            ],
+        ):
+            candidate = workflow._sample_interior_vertex(existing, side=100.0)
+
+        self.assertAlmostEqual(candidate[0], 30.0)
+        self.assertAlmostEqual(candidate[1], 73.0)
+
     def test_optimize_until_local_green_keeps_going_until_geometry_is_generic(self) -> None:
-        class FakePattern:
+        class FakePattern(cp.CreasePattern):
             def __init__(self) -> None:
+                super().__init__()
                 self.side = 1.0
-                self.vertices = [
-                    cp.Vertex(0.0, 0.0),
-                    cp.Vertex(1.0, 0.0),
-                    cp.Vertex(1.0, 1.0),
-                    cp.Vertex(0.0, 1.0),
-                    cp.Vertex(0.5, 0.5),
-                    cp.Vertex(0.5002, 0.5002),
-                ]
-                self.folds: set[cp.Fold] = set()
+                for x, y in (
+                    (0.0, 0.0),
+                    (1.0, 0.0),
+                    (1.0, 1.0),
+                    (0.0, 1.0),
+                    (0.5, 0.55),
+                    (0.5002, 0.5502),
+                ):
+                    self.add_vertex(x, y)
                 self.optimize_calls = 0
 
             def analyze_pattern(self) -> cp.PatternDiagnosticReport:
@@ -195,7 +239,7 @@ class GeometryQualityTests(unittest.TestCase):
             def optimize(self) -> SimpleNamespace:
                 self.optimize_calls += 1
                 self.vertices[-1].x = 0.8
-                self.vertices[-1].y = 0.8
+                self.vertices[-1].y = 0.7
                 return SimpleNamespace(nit=1, fun=0.0)
 
         pattern = FakePattern()
@@ -207,6 +251,40 @@ class GeometryQualityTests(unittest.TestCase):
         self.assertEqual(pattern.optimize_calls, 1)
         self.assertIsNotNone(result.geometry_quality)
         self.assertTrue(result.geometry_quality.generic)
+
+    def test_optimize_until_local_green_repairs_nearly_collinear_geometry(self) -> None:
+        class FakePattern(cp.CreasePattern):
+            def __init__(self) -> None:
+                super().__init__()
+                self.side = 1.0
+                self.optimize_calls = 0
+                for x, y in (
+                    (0.0, 0.0),
+                    (1.0, 0.0),
+                    (1.0, 1.0),
+                    (0.0, 1.0),
+                    (0.2, 0.35),
+                    (0.5, 0.42505),
+                    (0.8, 0.5),
+                ):
+                    self.add_vertex(x, y)
+
+            def analyze_pattern(self) -> cp.PatternDiagnosticReport:
+                return _local_pass_report()
+
+            def optimize(self) -> SimpleNamespace:
+                self.optimize_calls += 1
+                return SimpleNamespace(nit=1, fun=0.0)
+
+        pattern = FakePattern()
+
+        self.assertFalse(workflow.geometry_quality(pattern).generic)
+
+        result = workflow.optimize_until_local_green(pattern, max_rounds=2)
+
+        self.assertTrue(result.green)
+        self.assertGreaterEqual(pattern.optimize_calls, 1)
+        self.assertTrue(workflow.geometry_quality(pattern).generic)
 
 
 if __name__ == "__main__":
