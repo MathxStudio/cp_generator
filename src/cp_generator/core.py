@@ -861,6 +861,139 @@ class CreasePattern():
                     break
         return adj_folds
 
+    def _assignment_signature(self):
+        vertex_index = self.vertex_index_map()
+        ordered = sorted(
+            self.folds,
+            key=lambda fold: tuple(sorted((vertex_index[fold.v1], vertex_index[fold.v2]))),
+        )
+        return tuple(fold.type for fold in ordered)
+
+    def _interior_vertices_satisfy_maekawa(self):
+        for vertex in self.none_edge_vertices():
+            if not self.maekawa(vertex):
+                return False
+        return True
+
+    def _apply_fold_updates(self, updates):
+        for fold, fold_type in updates.items():
+            fold.type = fold_type
+
+    def _obtuse_monochrome_glitches(self, v, tolerance=1e-9):
+        if self.on_edge(v):
+            return tuple()
+
+        folds = self.clockwise_folds(v)
+        angles = self.adjacent_angles(v)
+        if len(folds) < 3 or len(angles) != len(folds):
+            return tuple()
+
+        threshold = (math.pi / 2.0) + tolerance
+        glitches = []
+        for index in range(len(angles)):
+            if angles[index] <= threshold or angles[(index + 1) % len(angles)] <= threshold:
+                continue
+
+            left = folds[index]
+            middle = folds[(index + 1) % len(folds)]
+            right = folds[(index + 2) % len(folds)]
+            if (
+                left.type not in (0, 1)
+                or middle.type not in (0, 1)
+                or right.type not in (0, 1)
+            ):
+                continue
+
+            if left.type == right.type and middle.type != left.type:
+                glitches.append((left, middle, right))
+
+        return tuple(glitches)
+
+    def _count_obtuse_monochrome_glitches(self):
+        total = 0
+        for vertex in self.none_edge_vertices():
+            total += len(self._obtuse_monochrome_glitches(vertex))
+        return total
+
+    def _maekawa_preserving_glitch_fix(self, vertex, left, middle, right):
+        candidates = (
+            {middle: left.type},
+            {left: middle.type, right: middle.type},
+        )
+        valid_updates = []
+
+        for updates in candidates:
+            original = {fold: fold.type for fold in updates}
+            self._apply_fold_updates(updates)
+            if self.maekawa(vertex) and self._interior_vertices_satisfy_maekawa():
+                valid_updates.append(dict(updates))
+            self._apply_fold_updates(original)
+
+        if len(valid_updates) == 1:
+            return valid_updates[0]
+        return None
+
+    def repair_obtuse_monochrome_glitches(self):
+        repairs = 0
+        seen_signatures = {self._assignment_signature()}
+
+        while True:
+            current_glitch_count = self._count_obtuse_monochrome_glitches()
+            if current_glitch_count == 0:
+                break
+
+            best_updates = None
+            best_glitch_count = None
+            best_update_size = None
+            best_signature = None
+
+            for vertex in self.none_edge_vertices():
+                for left, middle, right in self._obtuse_monochrome_glitches(vertex):
+                    updates = self._maekawa_preserving_glitch_fix(
+                        vertex,
+                        left,
+                        middle,
+                        right,
+                    )
+                    if updates is None:
+                        continue
+
+                    original = {fold: fold.type for fold in updates}
+                    self._apply_fold_updates(updates)
+                    candidate_signature = self._assignment_signature()
+                    candidate_glitch_count = self._count_obtuse_monochrome_glitches()
+                    self._apply_fold_updates(original)
+
+                    if candidate_signature in seen_signatures:
+                        continue
+
+                    if (
+                        best_glitch_count is None
+                        or candidate_glitch_count < best_glitch_count
+                        or (
+                            candidate_glitch_count == best_glitch_count
+                            and len(updates) < best_update_size
+                        )
+                        or (
+                            candidate_glitch_count == best_glitch_count
+                            and len(updates) == best_update_size
+                            and candidate_signature < best_signature
+                        )
+                    ):
+                        best_updates = dict(updates)
+                        best_glitch_count = candidate_glitch_count
+                        best_update_size = len(updates)
+                        best_signature = candidate_signature
+
+            if best_updates is None or best_glitch_count > current_glitch_count:
+                break
+
+            self._apply_fold_updates(best_updates)
+            seen_signatures.add(self._assignment_signature())
+            repairs += 1
+
+        return repairs
+
     def get_pairings(self, v):
         # Run algorithm to pair vertices around locally minimal angles
         # This is the algorithm from the paper The Complexity of Flat Origami by Bern and Hayes
@@ -1118,12 +1251,7 @@ class CreasePattern():
                         group[0][i].type = -1
 
         def assignment_signature():
-            vertex_index = {vertex: index for index, vertex in enumerate(self.vertices)}
-            ordered = sorted(
-                self.folds,
-                key=lambda fold: tuple(sorted((vertex_index[fold.v1], vertex_index[fold.v2]))),
-            )
-            return tuple(fold.type for fold in ordered)
+            return self._assignment_signature()
 
         def interlacing_score():
             score = 0.0
@@ -1173,6 +1301,8 @@ class CreasePattern():
                     if minority > 0:
                         score += 0.2 * minority
 
+            score -= 4.0 * self._count_obtuse_monochrome_glitches()
+
             return score
 
         best_choice = None
@@ -1207,6 +1337,7 @@ class CreasePattern():
 
         if best_choice is not None:
             apply_choice(best_choice)
+            repaired_glitches = self.repair_obtuse_monochrome_glitches()
             assigned_fold_count = sum(1 for fold in self.folds if fold.type in (0, 1))
             unassigned_fold_count = sum(1 for fold in self.folds if fold.type == -1)
             message = "A locally admissible mountain/valley assignment was found."
@@ -1214,6 +1345,21 @@ class CreasePattern():
                 message = (
                     "A locally admissible assignment was found, but some folds remain underdetermined."
                 )
+            if repaired_glitches > 0:
+                detail = (
+                    f" after repairing {repaired_glitches} obtuse-angle glitch"
+                    f"{'es' if repaired_glitches != 1 else ''}"
+                )
+                if unassigned_fold_count > 0:
+                    message = (
+                        "A locally admissible assignment was found"
+                        f"{detail}, but some folds remain underdetermined."
+                    )
+                else:
+                    message = (
+                        "A locally admissible mountain/valley assignment was found"
+                        f"{detail}."
+                    )
             return AssignmentSearchResult(
                 success=True,
                 message=message,
