@@ -6,6 +6,8 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-23
+
 ### Added
 - Shared workflow engine for desktop and mobile orchestration.
 - Checked-in validation corpus and `cp-generator-diagnostics` CLI.
