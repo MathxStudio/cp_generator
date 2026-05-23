@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -57,6 +57,8 @@ class FoldSimulationDiagnostic:
     message: str
     preview_mode: str = "none"
     used_reference_pattern: bool = False
+    basis: str = "not_run"
+    heuristic_reasons: tuple[str, ...] = ()
 
 
 class FoldedFigureModel:
@@ -119,6 +121,18 @@ class FoldedFigureModel:
             center = 0.5 * (min(offsets) + max(offsets))
             offsets = [value - center for value in offsets]
         return tuple(offsets)
+
+    def face_points_at_angle(self, angle: float) -> tuple[np.ndarray, ...]:
+        posed_transforms = self._pose_tree(angle)
+        points_by_face: list[np.ndarray] = []
+        for index, face in enumerate(self.faces):
+            face_points = []
+            for vertex_index in face.vertices:
+                face_points.append(
+                    _apply_transform_3d(posed_transforms[index], self.coords[vertex_index])
+                )
+            points_by_face.append(np.array(face_points, dtype=float))
+        return tuple(points_by_face)
 
     def _build_final_face_points(self) -> tuple[np.ndarray, ...]:
         states: list[np.ndarray] = []
@@ -417,6 +431,19 @@ def try_build_folded_figure(
 def analyze_foldability(pattern: cp.CreasePattern) -> FoldSimulationDiagnostic:
     _, diagnostic = try_build_folded_figure(pattern)
     return diagnostic
+
+
+def with_basis(
+    diagnostic: FoldSimulationDiagnostic,
+    *,
+    basis: str,
+    heuristic_reasons: tuple[str, ...] = (),
+) -> FoldSimulationDiagnostic:
+    return replace(
+        diagnostic,
+        basis=basis,
+        heuristic_reasons=heuristic_reasons,
+    )
 
 
 def build_approximate_folded_figure(pattern: cp.CreasePattern) -> ApproximateFoldedFigureModel:

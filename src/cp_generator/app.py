@@ -12,7 +12,7 @@ import numpy as np
 from . import core as cp
 from . import exporting
 from . import fold_sim
-from . import mobile_api
+from . import workflow
 
 
 DEFAULT_POINTS = 8
@@ -1750,72 +1750,38 @@ class CPGeneratorApp:
                     self._apply_diagnostic_badge(widget, cp.STATUS_NOT_RUN)
             return
 
-        self.diagnostic_report = self.pattern.analyze_pattern()
+        self.diagnostic_report = workflow.merge_report_with_preview(
+            self.pattern.analyze_pattern(),
+            (
+                self.fold_simulation_diagnostic
+                if self.fold_simulation_diagnostic is not None
+                else workflow.preview_not_run_diagnostic(self.pattern)
+            ),
+        )
+
         local_status = self.diagnostic_report.local_status
         assignment_status = self.diagnostic_report.fold_assignment_status
         global_status = self.diagnostic_report.global_status
-        preview_status = cp.STATUS_NOT_RUN
-
+        preview_status = self.diagnostic_report.preview_status
         detail = (
             self.diagnostic_report.summary[0]
             if self.diagnostic_report.summary
             else self.diagnostic_report.global_diagnostic.message
         )
 
-        if self.fold_simulation_diagnostic is not None:
-            preview_status = self.fold_simulation_diagnostic.status
-            if global_status != cp.STATUS_FAIL:
-                global_status = self.fold_simulation_diagnostic.status
-            detail = self.fold_simulation_diagnostic.message or detail
-
-        self.diagnostic_report = cp.PatternDiagnosticReport(
-            local_status=local_status,
-            global_status=global_status,
-            preview_status=preview_status,
-            fold_assignment_status=assignment_status,
-            vertex_diagnostics=self.diagnostic_report.vertex_diagnostics,
-            fold_assignment=self.diagnostic_report.fold_assignment,
-            global_diagnostic=cp.GlobalDiagnostic(
-                status=global_status,
-                used_exact_faces=(
-                    self.fold_simulation_diagnostic is not None
-                    and self.fold_simulation_diagnostic.preview_mode == "exact"
-                ),
-                used_reference_pattern=(
-                    self.fold_simulation_diagnostic.used_reference_pattern
-                    if self.fold_simulation_diagnostic is not None
-                    else self.diagnostic_report.global_diagnostic.used_reference_pattern
-                ),
-                uses_provisional_signs=(
-                    self.fold_simulation_diagnostic.uses_provisional_signs
-                    if self.fold_simulation_diagnostic is not None
-                    else self.diagnostic_report.global_diagnostic.uses_provisional_signs
-                ),
-                uses_approximate_cycles=(
-                    self.fold_simulation_diagnostic.uses_approximate_cycles
-                    if self.fold_simulation_diagnostic is not None
-                    else self.diagnostic_report.global_diagnostic.uses_approximate_cycles
-                ),
-                cycle_drift=(
-                    self.fold_simulation_diagnostic.cycle_drift
-                    if self.fold_simulation_diagnostic is not None
-                    else self.diagnostic_report.global_diagnostic.cycle_drift
-                ),
-                crossing_fold_pairs=self.diagnostic_report.global_diagnostic.crossing_fold_pairs,
-                face_count=(
-                    self.fold_simulation_diagnostic.face_count
-                    if self.fold_simulation_diagnostic is not None
-                    else self.diagnostic_report.global_diagnostic.face_count
-                ),
-                message=detail,
-            ),
-            summary=(detail,),
-        )
-
         self.local_diag_var.set(f"Local: {local_status}")
         self.assignment_diag_var.set(f"Assignment: {assignment_status}")
-        self.global_diag_var.set(f"Global: {global_status}")
-        self.preview_diag_var.set(f"Preview: {preview_status}")
+        self.global_diag_var.set(
+            f"Global: {global_status}{self._diagnostic_basis_suffix(self.diagnostic_report.global_diagnostic.basis)}"
+        )
+        preview_basis = (
+            self.fold_simulation_diagnostic.basis
+            if self.fold_simulation_diagnostic is not None
+            else workflow.BASIS_NOT_RUN
+        )
+        self.preview_diag_var.set(
+            f"Preview: {preview_status}{self._diagnostic_basis_suffix(preview_basis)}"
+        )
         self.diagnostic_detail_var.set(detail)
 
         if hasattr(self, "local_diag_badge"):
@@ -1868,18 +1834,15 @@ class CPGeneratorApp:
             return
         self.optimize_metrics_var.set(f"{prefix}: " + " · ".join(parts))
 
+    def _diagnostic_basis_suffix(self, basis: str) -> str:
+        if basis in (workflow.BASIS_CERTIFIED, workflow.BASIS_HEURISTIC):
+            return f" ({basis})"
+        return ""
+
     def _all_boxes_green(self) -> bool:
         if self.diagnostic_report is None:
             return False
-        return all(
-            status == cp.STATUS_PASS
-            for status in (
-                self.diagnostic_report.local_status,
-                self.diagnostic_report.fold_assignment_status,
-                self.diagnostic_report.global_status,
-                self.diagnostic_report.preview_status,
-            )
-        )
+        return workflow.all_green(self.diagnostic_report)
 
     def _optimize_pattern_until_local_green(
         self,
@@ -1888,14 +1851,22 @@ class CPGeneratorApp:
         redraw_each_round: bool,
     ) -> dict[str, object]:
         self._refresh_diagnostics()
-        if self.diagnostic_report is not None and self.diagnostic_report.local_status == cp.STATUS_PASS:
+        quality = workflow.geometry_quality(self.pattern)
+        if (
+            self.diagnostic_report is not None
+            and self.diagnostic_report.local_status == cp.STATUS_PASS
+            and quality.generic
+        ):
             self._set_optimize_metrics(prefix="Optimizer")
             return {
                 "green": True,
+                "generic": True,
                 "rounds": 0,
                 "iterations": 0,
                 "loss": None,
                 "result": None,
+                "geometry_message": quality.message,
+                "min_vertex_distance": quality.min_vertex_distance,
             }
 
         rounds = 0
@@ -1903,11 +1874,11 @@ class CPGeneratorApp:
         last_loss: float | None = None
         last_result = None
         while rounds < max_rounds:
-            rounds += 1
-            last_result = self.pattern.optimize()
-            total_iterations += int(getattr(last_result, "nit", 0) or 0)
-            loss = getattr(last_result, "fun", None)
-            last_loss = float(loss) if loss is not None else None
+            round_result = workflow.optimize_pattern(self.pattern, rounds=1)
+            rounds += int(round_result.rounds)
+            total_iterations += int(round_result.iterations)
+            last_loss = round_result.loss
+            last_result = round_result.last_result
             self._clear_fold_assignments()
             self.fold_assignment_ready = False
             self.preview_model = None
@@ -1926,19 +1897,29 @@ class CPGeneratorApp:
             if redraw_each_round:
                 self._redraw_sheet()
                 self.root.update_idletasks()
+            quality = workflow.geometry_quality(self.pattern)
             if self.diagnostic_report is not None and self.diagnostic_report.local_status == cp.STATUS_PASS:
-                break
+                if quality.generic:
+                    break
+                self.automation_note_var.set(
+                    f"Local checks passed at round {rounds}, but {quality.message}"
+                )
 
+        quality = workflow.geometry_quality(self.pattern)
         green = (
             self.diagnostic_report is not None
             and self.diagnostic_report.local_status == cp.STATUS_PASS
+            and quality.generic
         )
         return {
             "green": green,
+            "generic": quality.generic,
             "rounds": rounds,
             "iterations": total_iterations,
             "loss": last_loss,
             "result": last_result,
+            "geometry_message": quality.message,
+            "min_vertex_distance": quality.min_vertex_distance,
         }
 
     def _parse_point_count(self) -> int | None:
@@ -1964,16 +1945,7 @@ class CPGeneratorApp:
         return count
 
     def _build_pattern(self, point_count: int) -> cp.CreasePattern:
-        pattern = cp.CreasePattern()
-        pattern.side = MODEL_SIDE
-        pattern.add_square_vertices()
-        for _ in range(point_count):
-            pattern.add_random_vertex()
-        pattern.push_to_edge(20)
-        pattern.triangulate()
-        pattern.evenize_vertices()
-        pattern.remove_edge_folds()
-        return pattern
+        return workflow.build_pattern(point_count, side=MODEL_SIDE)
 
     def _run_action(self, busy_message: str, action) -> None:
         self._set_busy(True)
@@ -1996,248 +1968,128 @@ class CPGeneratorApp:
             self._set_busy(False)
 
     def _clear_fold_assignments(self) -> None:
-        for fold in self.pattern.folds:
-            fold.type = -1
+        workflow.clear_assignments(self.pattern)
 
     def _clone_pattern(self, pattern: cp.CreasePattern) -> cp.CreasePattern:
-        return pattern.clone()
-
-    def _edge_map(self, pattern: cp.CreasePattern) -> dict[tuple[int, int], cp.Fold]:
-        vertex_index = {vertex: index for index, vertex in enumerate(pattern.vertices)}
-        return {
-            tuple(sorted((vertex_index[fold.v1], vertex_index[fold.v2]))): fold
-            for fold in pattern.folds
-        }
-
-    def _same_connectivity(
-        self, first: cp.CreasePattern, second: cp.CreasePattern
-    ) -> bool:
-        if len(first.vertices) != len(second.vertices):
-            return False
-        if len(first.folds) != len(second.folds):
-            return False
-        return set(self._edge_map(first)) == set(self._edge_map(second))
-
-    def _copy_fold_types(
-        self, source: cp.CreasePattern, target: cp.CreasePattern
-    ) -> bool:
-        if not self._same_connectivity(source, target):
-            return False
-
-        source_edges = self._edge_map(source)
-        target_edges = self._edge_map(target)
-        for edge_key, target_fold in target_edges.items():
-            target_fold.type = source_edges[edge_key].type
-        return True
+        return workflow.clone_pattern(pattern)
 
     def _refresh_preview_reference(self) -> None:
-        if not self.pattern.folds:
-            return
-        candidate = self._clone_pattern(self.pattern)
-        model, diagnostic = fold_sim.try_build_folded_figure(candidate)
-        if model is None or diagnostic.status == cp.STATUS_FAIL:
-            return
-        self.preview_reference_pattern = candidate
+        candidate = workflow.refresh_preview_reference(self.pattern)
+        if candidate is not None:
+            self.preview_reference_pattern = candidate
 
     def _rebuild_preview(self, autoplay: bool = False) -> None:
         self._stop_preview_animation()
         self.preview_progress_var.set(0.0)
         self._update_preview_progress_text()
         self.fold_simulation_diagnostic = None
+        result = workflow.build_preview(
+            self.pattern,
+            preview_reference_pattern=self.preview_reference_pattern,
+            allow_reference_fallback=True,
+            spatial_mode=False,
+        )
+        self.preview_model = result.model
+        self.fold_simulation_diagnostic = result.diagnostic
+        if result.preview_reference_pattern is not None:
+            self.preview_reference_pattern = result.preview_reference_pattern
 
-        if not self.pattern.vertices:
-            self.preview_model = None
-            self._refresh_diagnostics()
-            self.preview_caption_var.set(
-                "Generate a crease pattern to open the folded figure."
-            )
-            self.preview_detail_var.set(
-                "The 3D simulation appears here after the sheet exists and a fold assignment is ready."
-            )
-            self._sync_preview_controls()
-            self._redraw_preview()
-            return
-
-        if not self.pattern.folds:
-            self.preview_model = None
-            self._refresh_diagnostics()
-            self.preview_caption_var.set("This sheet has no interior folds to animate.")
-            self.preview_detail_var.set(
-                "Generate a denser pattern if you want a folded figure with internal structure."
-            )
-            self._sync_preview_controls()
-            self._redraw_preview()
-            return
-
-        if not self.fold_assignment_ready:
-            self.preview_model = None
-            self._refresh_diagnostics()
-            self.preview_caption_var.set(
-                "Assign mountain and valley folds to unlock the folded figure."
-            )
-            self.preview_detail_var.set(
-                "The 3D preview waits for a valid fold assignment so the final stack is not misleading."
-            )
-            self._sync_preview_controls()
-            self._redraw_preview()
-            return
-
-        failure_messages: list[str] = []
-        candidates: list[tuple[str, str, cp.CreasePattern]] = [
-            ("exact", "current", self._clone_pattern(self.pattern))
-        ]
-        if self.preview_reference_pattern is not None:
-            fallback = self._clone_pattern(self.preview_reference_pattern)
-            if self._copy_fold_types(self.pattern, fallback):
-                candidates.append(("exact", "reference", fallback))
-
-        candidates.append(("mesh", "current", self._clone_pattern(self.pattern)))
-        if self.preview_reference_pattern is not None:
-            fallback = self._clone_pattern(self.preview_reference_pattern)
-            if self._copy_fold_types(self.pattern, fallback):
-                candidates.append(("mesh", "reference", fallback))
-
-        for solver_name, source_name, candidate in candidates:
-            if solver_name == "exact":
-                model, diagnostic = fold_sim.try_build_folded_figure(candidate)
-                if model is None:
-                    failure_messages.append(diagnostic.message)
-                    continue
-            else:
-                try:
-                    model = fold_sim.build_approximate_folded_figure_with_mode(
-                        candidate, spatial_mode=False
-                    )
-                except fold_sim.FoldSimulationError as exc:
-                    failure_messages.append(str(exc))
-                    continue
-                diagnostic = fold_sim.FoldSimulationDiagnostic(
-                    status=cp.STATUS_WARNING,
-                    face_count=getattr(model, "face_count", None),
-                    uses_provisional_signs=model.uses_provisional_signs,
-                    uses_approximate_cycles=model.uses_approximate_cycles,
-                    cycle_drift=model.cycle_drift,
-                    crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
-                    message="Only the mesh-based preview path succeeded for this sheet.",
-                    preview_mode="mesh",
-                    used_reference_pattern=False,
-                )
-
-            self.preview_model = model
-            if source_name == "current" and solver_name == "exact":
-                self.preview_reference_pattern = self._clone_pattern(candidate)
-                self.fold_simulation_diagnostic = diagnostic
-                notes: list[str] = []
-                if model.uses_provisional_signs:
-                    notes.append(
-                        "A few underdetermined creases were oriented automatically."
-                    )
-                if model.uses_approximate_cycles:
-                    notes.append(
-                        f"The solver detected mild cycle drift ({model.cycle_drift:.3f}), so the final stack is an approximation."
-                    )
-
-                if notes:
+        if result.model is None:
+            if result.diagnostic.status == cp.STATUS_NOT_RUN:
+                if not self.pattern.vertices:
                     self.preview_caption_var.set(
-                        "The folded figure is ready with a few guarded approximations."
-                    )
-                    self.preview_detail_var.set(" ".join(notes))
-                else:
-                    self.preview_caption_var.set(
-                        "The folded figure is ready and reflects the current crease geometry."
+                        "Generate a crease pattern to open the folded figure."
                     )
                     self.preview_detail_var.set(
-                        "Press play to fold, or drag directly on the model to inspect the final layered state from any angle."
+                        "The 3D simulation appears here after the sheet exists and a fold assignment is ready."
                     )
-            elif source_name == "reference" and solver_name == "exact":
-                self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
-                    status=cp.STATUS_WARNING,
-                    face_count=diagnostic.face_count,
-                    uses_provisional_signs=diagnostic.uses_provisional_signs,
-                    uses_approximate_cycles=diagnostic.uses_approximate_cycles,
-                    cycle_drift=diagnostic.cycle_drift,
-                    crossing_fold_pairs=diagnostic.crossing_fold_pairs,
-                    message="Exact preview succeeded only from the last stable reference geometry.",
-                    preview_mode="exact",
-                    used_reference_pattern=True,
-                )
-                self.preview_caption_var.set(
-                    "The folded figure is ready from the last stable planar geometry."
-                )
-                detail = "The live optimized sheet drifted into a numerically unstable layout, so the preview falls back to the last geometry that remained planar and flat-foldable enough to stack."
-                if model.uses_provisional_signs:
-                    detail += (
-                        " A few underdetermined creases were oriented automatically."
+                elif not self.pattern.folds:
+                    self.preview_caption_var.set(
+                        "This sheet has no interior folds to animate."
                     )
-                if model.uses_approximate_cycles:
-                    detail += f" Cycle drift remained at about {model.cycle_drift:.3f}, so the stack is approximate."
-                self.preview_detail_var.set(detail)
-            elif source_name == "current":
-                self.fold_simulation_diagnostic = diagnostic
-                self.preview_caption_var.set(
-                    "The folded figure is ready with a mesh-based 3D fallback."
-                )
-                detail = "The exact face solver rejected this sheet, so the preview now uses a guarded triangle mesh that still settles into a flat layered stack."
-                if model.uses_provisional_signs:
-                    detail += (
-                        " A few underdetermined creases were oriented automatically."
+                    self.preview_detail_var.set(
+                        "Generate a denser pattern if you want a folded figure with internal structure."
                     )
-                self.preview_detail_var.set(detail)
+                else:
+                    self.preview_caption_var.set(
+                        "Assign mountain and valley folds to unlock the folded figure."
+                    )
+                    self.preview_detail_var.set(
+                        "The 3D preview waits for a valid fold assignment so the final stack is not misleading."
+                    )
             else:
-                self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
-                    status=cp.STATUS_WARNING,
-                    face_count=diagnostic.face_count,
-                    uses_provisional_signs=diagnostic.uses_provisional_signs,
-                    uses_approximate_cycles=diagnostic.uses_approximate_cycles,
-                    cycle_drift=diagnostic.cycle_drift,
-                    crossing_fold_pairs=diagnostic.crossing_fold_pairs,
-                    message="Only a mesh fallback from the last stable reference geometry succeeded.",
-                    preview_mode="mesh",
-                    used_reference_pattern=True,
-                )
                 self.preview_caption_var.set(
-                    "The folded figure is ready from a stable mesh fallback."
+                    "The folded figure is unavailable for this sheet."
                 )
-                detail = "The current geometry became too unstable for exact reconstruction, so the preview uses a fallback mesh from the last stable sheet and still closes into a flat layered stack."
-                if model.uses_provisional_signs:
-                    detail += (
-                        " A few underdetermined creases were oriented automatically."
-                    )
-                self.preview_detail_var.set(detail)
-
+                self.preview_detail_var.set(result.diagnostic.message)
             self._refresh_diagnostics()
             self._sync_preview_controls()
             self._redraw_preview()
-            if autoplay:
-                self._replay_preview(play=True)
             return
 
-        self.preview_model = None
-        self.fold_simulation_diagnostic = fold_sim.FoldSimulationDiagnostic(
-            status=cp.STATUS_FAIL,
-            face_count=None,
-            uses_provisional_signs=False,
-            uses_approximate_cycles=False,
-            cycle_drift=None,
-            crossing_fold_pairs=self.pattern.crossing_fold_pairs(),
-            message=(
-                failure_messages[-1]
-                if failure_messages
-                else "The folded figure could not be constructed."
-            ),
-            preview_mode="none",
-            used_reference_pattern=False,
-        )
-        failure = (
-            failure_messages[-1]
-            if failure_messages
-            else "The folded figure could not be constructed."
-        )
-        self.preview_caption_var.set("The folded figure is unavailable for this sheet.")
-        self.preview_detail_var.set(failure)
+        model = result.model
+        diagnostic = result.diagnostic
+        if result.source == "current" and result.solver == "exact":
+            notes: list[str] = []
+            if diagnostic.uses_provisional_signs:
+                notes.append("A few underdetermined creases were oriented automatically.")
+            if diagnostic.uses_approximate_cycles:
+                notes.append(
+                    f"The solver detected mild cycle drift ({model.cycle_drift:.3f}), so the final stack is an approximation."
+                )
+
+            if notes:
+                self.preview_caption_var.set(
+                    "The folded figure is ready with a few guarded approximations."
+                )
+                self.preview_detail_var.set(" ".join(notes))
+            else:
+                self.preview_caption_var.set(
+                    "The folded figure is ready and reflects the current crease geometry."
+                )
+                self.preview_detail_var.set(
+                    "Press play to fold, or drag directly on the model to inspect the final layered state from any angle."
+                )
+        elif result.source == "reference" and result.solver == "exact":
+            self.preview_caption_var.set(
+                "The folded figure is ready from the last stable planar geometry."
+            )
+            detail = (
+                "The live optimized sheet drifted into a numerically unstable layout, so the preview falls back to the last geometry that remained planar and flat-foldable enough to stack."
+            )
+            if diagnostic.uses_provisional_signs:
+                detail += " A few underdetermined creases were oriented automatically."
+            if diagnostic.uses_approximate_cycles:
+                detail += (
+                    f" Cycle drift remained at about {model.cycle_drift:.3f}, so the stack is approximate."
+                )
+            self.preview_detail_var.set(detail)
+        elif result.source == "current":
+            self.preview_caption_var.set(
+                "The folded figure is ready with a mesh-based 3D fallback."
+            )
+            detail = (
+                "The exact face solver rejected this sheet, so the preview now uses a guarded triangle mesh that still settles into a flat layered stack."
+            )
+            if diagnostic.uses_provisional_signs:
+                detail += " A few underdetermined creases were oriented automatically."
+            self.preview_detail_var.set(detail)
+        else:
+            self.preview_caption_var.set(
+                "The folded figure is ready from a stable mesh fallback."
+            )
+            detail = (
+                "The current geometry became too unstable for exact reconstruction, so the preview uses a fallback mesh from the last stable sheet and still closes into a flat layered stack."
+            )
+            if diagnostic.uses_provisional_signs:
+                detail += " A few underdetermined creases were oriented automatically."
+            self.preview_detail_var.set(detail)
+
         self._refresh_diagnostics()
         self._sync_preview_controls()
         self._redraw_preview()
+        if autoplay:
+            self._replay_preview(play=True)
 
     def _sync_preview_controls(self) -> None:
         enabled = (not self._busy) and (self.preview_model is not None)
@@ -2509,6 +2361,22 @@ class CPGeneratorApp:
                 self.automation_note_var.set(
                     f"Local criteria passed after {result['rounds']} optimization rounds."
                 )
+            elif (
+                self.diagnostic_report is not None
+                and self.diagnostic_report.local_status == cp.STATUS_PASS
+            ):
+                self.sheet_caption_var.set(
+                    "Automation reached a locally valid sheet, but rejected it because the geometry remained near-degenerate."
+                )
+                self._set_status(
+                    "Near-Degenerate",
+                    "Local checks passed, but the resulting sheet was too collapsed to accept.",
+                    result["geometry_message"],
+                    tone="warning",
+                )
+                self.automation_note_var.set(
+                    f"Stopped after {result['rounds']} optimization rounds because {result['geometry_message']}"
+                )
             else:
                 self.sheet_caption_var.set(
                     "Automation improved the sheet but stopped before the local checks turned fully green."
@@ -2545,6 +2413,7 @@ class CPGeneratorApp:
         def action() -> None:
             found = False
             last_assignment_message = "No search attempt was executed."
+            last_geometry_message = ""
             for attempt in range(1, max_attempts + 1):
                 self.pattern = self._build_pattern(point_count)
                 self.preview_reference_pattern = self._clone_pattern(self.pattern)
@@ -2586,7 +2455,9 @@ class CPGeneratorApp:
                 self._redraw_sheet()
                 self.root.update_idletasks()
 
-                if self._all_boxes_green():
+                quality = workflow.geometry_quality(self.pattern)
+                last_geometry_message = quality.message
+                if self._all_boxes_green() and quality.generic:
                     found = True
                     self.sheet_caption_var.set(
                         "Automation found a sheet whose local, assignment, global, and preview badges are all green."
@@ -2601,6 +2472,11 @@ class CPGeneratorApp:
                         f"All four badges turned green on attempt {attempt} after {optimize_result['rounds']} local optimization rounds."
                     )
                     break
+                if self._all_boxes_green():
+                    self.automation_note_var.set(
+                        f"Attempt {attempt}/{max_attempts} reached all-green diagnostics but was rejected because {quality.message}"
+                    )
+                    continue
 
                 self.automation_note_var.set(
                     f"Attempt {attempt}/{max_attempts} finished: local {self.local_diag_var.get().split(': ', 1)[1]}, assignment {self.assignment_diag_var.get().split(': ', 1)[1]}, global {self.global_diag_var.get().split(': ', 1)[1]}, preview {self.preview_diag_var.get().split(': ', 1)[1]}."
@@ -2613,10 +2489,15 @@ class CPGeneratorApp:
                 self._set_status(
                     "Search Stopped",
                     "The generate-optimize-assign search hit its try limit.",
-                    "The current sheet is the last attempt. Increase the search-try limit or adjust the point count to keep searching.",
+                    (
+                        "The current sheet is the last attempt. "
+                        f"{last_geometry_message} Increase the search-try limit or adjust the point count to keep searching."
+                    ),
                     tone="warning",
                 )
-                self.automation_note_var.set(last_assignment_message)
+                self.automation_note_var.set(
+                    f"{last_assignment_message} {last_geometry_message}".strip()
+                )
 
         self._run_action("Searching for a sheet with all diagnostics badges green...", action)
 
@@ -2743,7 +2624,14 @@ class CPGeneratorApp:
                     fold_assignment_ready=bool(self.fold_assignment_ready),
                     metadata_lines=(
                         "Source: current pattern",
-                        f"All green: {'yes' if mobile_api._all_green(current_report) else 'no'}",
+                        (
+                            "All green: yes"
+                            if (
+                                workflow.all_green(current_report)
+                                and workflow.is_generic_geometry(self.pattern)
+                            )
+                            else "All green: no"
+                        ),
                     ),
                 )
                 self._set_status(
@@ -2789,7 +2677,14 @@ class CPGeneratorApp:
                     fold_assignment_ready=bool(self.fold_assignment_ready),
                     metadata_lines=(
                         "Source: current pattern",
-                        f"All green: {'yes' if mobile_api._all_green(current_report) else 'no'}",
+                        (
+                            "All green: yes"
+                            if (
+                                workflow.all_green(current_report)
+                                and workflow.is_generic_geometry(self.pattern)
+                            )
+                            else "All green: no"
+                        ),
                         f"Locked vertices: {len(self.pattern.vertices)}",
                     ),
                 )
@@ -3298,18 +3193,19 @@ class CPGeneratorApp:
             if len(pattern.vertices) != target_vertex_count:
                 continue
 
-            rounds = 0
-            report = pattern.analyze_pattern()
-            while rounds < max_local_rounds and report.local_status != cp.STATUS_PASS:
-                pattern.optimize()
-                for fold in pattern.folds:
-                    fold.type = -1
-                rounds += 1
-                report = pattern.analyze_pattern()
+            optimize_result = workflow.optimize_until_local_green(
+                pattern,
+                max_rounds=max_local_rounds,
+            )
+            rounds = int(optimize_result.rounds)
 
             assignment = pattern.assign_mv()
             merged = self._merged_pattern_report(pattern)
-            if assignment.success and mobile_api._all_green(merged):
+            if (
+                assignment.success
+                and workflow.all_green(merged)
+                and workflow.is_generic_geometry(pattern)
+            ):
                 return pattern, {
                     "attempts_used": attempt,
                     "local_rounds_used": rounds,
@@ -3354,8 +3250,8 @@ class CPGeneratorApp:
         self, pattern: cp.CreasePattern
     ) -> cp.PatternDiagnosticReport:
         report = pattern.analyze_pattern()
-        _, preview_diagnostic, _ = mobile_api._build_preview(pattern)
-        return mobile_api._merge_report_with_preview(report, preview_diagnostic)
+        preview = workflow.build_preview(pattern, spatial_mode=True)
+        return workflow.merge_report_with_preview(report, preview.diagnostic)
 
     def _current_point_count_hint(self, fallback: int | None = None) -> int:
         raw = self.point_count_var.get().strip()
@@ -3423,55 +3319,42 @@ class CPGeneratorApp:
         if fold_assignment_ready is None:
             fold_assignment_ready = bool(self.fold_assignment_ready)
 
-        return {
-            "format": "cp-generator-session",
-            "version": 1,
-            "point_count": point_count_value,
-            "text_scale": self.user_text_scale,
-            "sidebar_width": self.sidebar_width,
-            "show_labels": bool(self.show_labels_var.get()),
-            "preview_loop": bool(self.preview_loop_var.get()),
-            "preview_edge_families": bool(self.preview_edge_families_var.get()),
-            "fold_assignment_ready": bool(fold_assignment_ready),
-            "pattern": pattern.to_data(),
-            "preview_reference_pattern": (
-                preview_reference_pattern.to_data()
-                if preview_reference_pattern is not None
-                else None
-            ),
-        }
+        return workflow.build_session_payload(
+            pattern,
+            point_count=point_count_value,
+            preview_reference_pattern=preview_reference_pattern,
+            fold_assignment_ready=bool(fold_assignment_ready),
+            extra_state={
+                "text_scale": self.user_text_scale,
+                "sidebar_width": self.sidebar_width,
+                "show_labels": bool(self.show_labels_var.get()),
+                "preview_loop": bool(self.preview_loop_var.get()),
+                "preview_edge_families": bool(self.preview_edge_families_var.get()),
+            },
+        )
 
     def _restore_session_data(self, payload: dict[str, object]) -> None:
-        if payload.get("format") != "cp-generator-session":
-            raise ValueError("Unsupported session file format.")
-        if payload.get("version") != 1:
-            raise ValueError("Unsupported session file version.")
-
-        pattern_data = payload.get("pattern")
-        if not isinstance(pattern_data, dict):
-            raise ValueError("Session file is missing crease-pattern data.")
-
-        preview_reference_data = payload.get("preview_reference_pattern")
-        self.pattern = cp.CreasePattern.from_data(pattern_data)
+        restored = workflow.restore_session_payload(payload)
+        self.pattern = restored.pattern
         self.preview_reference_pattern = (
-            cp.CreasePattern.from_data(preview_reference_data)
-            if isinstance(preview_reference_data, dict)
+            restored.preview_reference_pattern
+            if restored.preview_reference_pattern is not None
             else self._clone_pattern(self.pattern)
         )
-        self.point_count_var.set(str(payload.get("point_count", DEFAULT_POINTS)))
-        text_scale = payload.get("text_scale")
+        self.point_count_var.set(str(restored.point_count or DEFAULT_POINTS))
+        text_scale = restored.extra_state.get("text_scale")
         if isinstance(text_scale, (int, float)):
             self._set_text_scale(float(text_scale))
-        sidebar_width = payload.get("sidebar_width")
+        sidebar_width = restored.extra_state.get("sidebar_width")
         if isinstance(sidebar_width, (int, float)):
             self.sidebar_width = int(sidebar_width)
             self._queue_apply_sidebar_split()
-        self.show_labels_var.set(bool(payload.get("show_labels", False)))
-        self.preview_loop_var.set(bool(payload.get("preview_loop", True)))
+        self.show_labels_var.set(bool(restored.extra_state.get("show_labels", False)))
+        self.preview_loop_var.set(bool(restored.extra_state.get("preview_loop", True)))
         self.preview_edge_families_var.set(
-            bool(payload.get("preview_edge_families", False))
+            bool(restored.extra_state.get("preview_edge_families", False))
         )
-        self.fold_assignment_ready = bool(payload.get("fold_assignment_ready", False))
+        self.fold_assignment_ready = restored.fold_assignment_ready
         self.preview_model = None
         self.preview_progress_var.set(0.0)
         self._reset_preview_camera()

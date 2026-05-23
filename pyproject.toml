@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 cp-generator = "cp_generator.app:main"
+cp-generator-diagnostics = "cp_generator.diagnostics_cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,6 +27,9 @@ dev = [
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+cp_generator = ["data/corpus/*.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

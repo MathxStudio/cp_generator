@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-workflow="portable-build.yml"
+workflow="build-artifacts.yml"
 
 gh workflow run "$workflow"
 sleep 5

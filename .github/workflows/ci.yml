@@ -1,0 +1,107 @@
+name: ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python-validation:
+    name: python-validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y python3-tk libcairo2 libcairo2-dev pkg-config
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Byte-compile key modules
+        run: |
+          python -m py_compile \
+            src/cp_generator/app.py \
+            src/cp_generator/mobile_api.py \
+            src/cp_generator/workflow.py \
+            src/cp_generator/exact_checker.py \
+            src/cp_generator/validation_corpus.py \
+            src/cp_generator/diagnostics_cli.py
+
+      - name: Run Python tests
+        run: uv run python -m unittest discover -s tests -t . -q
+
+      - name: Run validation corpus
+        run: uv run cp-generator-diagnostics --fail-on-mismatch
+
+      - name: Build wheel
+        run: uv build --wheel -o dist
+
+      - name: Wheel import smoke test
+        run: |
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install --upgrade pip
+          .wheel-smoke/bin/pip install dist/*.whl
+          .wheel-smoke/bin/python - <<'PY'
+          from cp_generator import validation_corpus
+
+          cases = validation_corpus.load_corpus()
+          assert len(cases) >= 6
+          print(f"Wheel import smoke test passed with {len(cases)} validation cases.")
+          PY
+
+  android-validation:
+    name: android-validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Lint and build Android debug app
+        working-directory: android-app
+        env:
+          CHAQUOPY_BUILD_PYTHON: python
+        run: gradle :app:lintDebug :app:testDebugUnitTest :app:assembleDebug

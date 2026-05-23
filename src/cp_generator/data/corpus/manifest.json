@@ -1,0 +1,95 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "assignment_status": "pass",
+        "exact_checker_status": "pass",
+        "global_basis": "certified",
+        "global_status": "pass",
+        "local_status": "pass",
+        "preview_basis": "certified",
+        "preview_mode": "exact",
+        "preview_status": "pass"
+      },
+      "id": "all_green",
+      "note": "Single-vertex star with a complete, exact mountain/valley assignment.",
+      "path": "all_green.cpfold.json"
+    },
+    {
+      "expected": {
+        "assignment_status": "not_run",
+        "exact_checker_status": "fail",
+        "global_basis": "certified",
+        "global_status": "fail",
+        "local_status": "fail",
+        "preview_basis": "not_run",
+        "preview_mode": "none",
+        "preview_status": "not_run"
+      },
+      "id": "odd_degree",
+      "note": "Interior vertex with odd degree should fail before any global claim.",
+      "path": "odd_degree.cpfold.json"
+    },
+    {
+      "expected": {
+        "assignment_status": "not_run",
+        "exact_checker_status": "fail",
+        "global_basis": "certified",
+        "global_status": "fail",
+        "local_status": "fail",
+        "preview_basis": "not_run",
+        "preview_mode": "none",
+        "preview_status": "not_run"
+      },
+      "id": "kawasaki_fail",
+      "note": "Even-degree vertex with asymmetric sectors should fail Kawasaki.",
+      "path": "kawasaki_fail.cpfold.json"
+    },
+    {
+      "expected": {
+        "assignment_status": "fail",
+        "exact_checker_status": "fail",
+        "global_basis": "certified",
+        "global_status": "fail",
+        "local_status": "pass",
+        "preview_basis": "certified",
+        "preview_mode": "exact",
+        "preview_status": "pass"
+      },
+      "id": "maekawa_fail",
+      "note": "Complete assignment violates Maekawa even though the exact face preview can still reconstruct.",
+      "path": "maekawa_fail.cpfold.json"
+    },
+    {
+      "expected": {
+        "assignment_status": "pass",
+        "exact_checker_status": "fail",
+        "global_basis": "certified",
+        "global_status": "fail",
+        "local_status": "pass",
+        "preview_basis": "heuristic",
+        "preview_mode": "mesh",
+        "preview_status": "warning"
+      },
+      "id": "crossing_folds",
+      "note": "Crossing folds are a certified failure even if the guarded mesh preview still renders.",
+      "path": "crossing_folds.cpfold.json"
+    },
+    {
+      "expected": {
+        "assignment_status": "fail",
+        "exact_checker_status": "fail",
+        "global_basis": "certified",
+        "global_status": "fail",
+        "local_status": "pass",
+        "preview_basis": "heuristic",
+        "preview_mode": "exact",
+        "preview_status": "warning"
+      },
+      "id": "preview_provisional",
+      "note": "Exact preview succeeds only with provisional fold signs, so it must stay warning-level.",
+      "path": "preview_provisional.cpfold.json"
+    }
+  ],
+  "version": 1
+}
