@@ -100,6 +100,7 @@ private const val UPDATE_REPOSITORY = "MathxStudio/cp_generator"
 private const val UPDATE_API_URL = "https://api.github.com/repos/$UPDATE_REPOSITORY/releases/latest"
 private const val DEFAULT_CAMERA_YAW = -0.55f
 private const val DEFAULT_CAMERA_PITCH = 0.42f
+private const val DEFAULT_PREVIEW_MOTION_PROFILE = "balanced_stack"
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel> {
@@ -138,6 +139,7 @@ private fun CpGeneratorApp(viewModel: MainViewModel) {
                 state = state,
                 onStageModeChanged = viewModel::setStageMode,
                 onPreviewProgressChanged = viewModel::updatePreviewProgress,
+                onPreviewMotionProfileChanged = viewModel::setPreviewMotionProfile,
                 onCameraDrag = viewModel::adjustCamera,
                 onResetCamera = viewModel::resetCamera,
             )
@@ -272,6 +274,7 @@ private fun StageCard(
     state: MainUiState,
     onStageModeChanged: (StageMode) -> Unit,
     onPreviewProgressChanged: (Float) -> Unit,
+    onPreviewMotionProfileChanged: (String) -> Unit,
     onCameraDrag: (Float, Float) -> Unit,
     onResetCamera: () -> Unit,
 ) {
@@ -340,6 +343,7 @@ private fun StageCard(
                     snapshot == null -> EmptyStage("No crease sheet yet")
                     currentMode == StageMode.PREVIEW && preview != null -> FoldPreviewStage(
                         preview = preview,
+                        motionProfile = state.previewMotionProfile,
                         progress = state.previewProgress,
                         yaw = state.cameraYaw,
                         pitch = state.cameraPitch,
@@ -355,7 +359,9 @@ private fun StageCard(
                 PreviewControls(
                     preview = preview,
                     progress = state.previewProgress,
+                    selectedMotionProfile = state.previewMotionProfile,
                     onProgressChanged = onPreviewProgressChanged,
+                    onMotionProfileChanged = onPreviewMotionProfileChanged,
                     onResetCamera = onResetCamera,
                 )
             }
@@ -485,16 +491,18 @@ private fun PatternStage(stage: StageModel) {
 @Composable
 private fun FoldPreviewStage(
     preview: PreviewModel,
+    motionProfile: String,
     progress: Float,
     yaw: Float,
     pitch: Float,
     onCameraDrag: (Float, Float) -> Unit,
 ) {
+    val activeMotionProfile = preview.resolveMotionProfile(motionProfile)
     Canvas(
         modifier = Modifier
             .fillMaxSize()
             .padding(12.dp)
-            .pointerInput(preview, yaw, pitch, progress) {
+            .pointerInput(preview, activeMotionProfile.key, yaw, pitch, progress) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
                     onCameraDrag(dragAmount.x, dragAmount.y)
@@ -503,12 +511,12 @@ private fun FoldPreviewStage(
     ) {
         drawRect(color = Paper)
 
-        val faces = interpolatePreviewFaces(preview, progress)
+        val faces = interpolatePreviewFaces(activeMotionProfile, progress)
         if (faces.isEmpty()) {
             return@Canvas
         }
 
-        val bounds = preview.bounds
+        val bounds = activeMotionProfile.bounds
         val centerX = (bounds.minX + bounds.maxX) * 0.5f
         val centerY = (bounds.minY + bounds.maxY) * 0.5f
         val centerZ = (bounds.minZ + bounds.maxZ) * 0.5f
@@ -583,7 +591,9 @@ private fun FoldPreviewStage(
 private fun PreviewControls(
     preview: PreviewModel?,
     progress: Float,
+    selectedMotionProfile: String,
     onProgressChanged: (Float) -> Unit,
+    onMotionProfileChanged: (String) -> Unit,
     onResetCamera: () -> Unit,
 ) {
     if (preview == null) {
@@ -595,6 +605,7 @@ private fun PreviewControls(
         return
     }
 
+    val activeMotionProfile = preview.resolveMotionProfile(selectedMotionProfile)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -603,7 +614,7 @@ private fun PreviewControls(
         ) {
             Text(
                 text = when (preview.mode) {
-                    "exact" -> "Exact fold stack"
+                    "exact" -> "Exact face preview"
                     "mesh" -> "Mesh fallback"
                     "scripted" -> "Authored sample finish"
                     else -> "Preview unavailable"
@@ -619,6 +630,23 @@ private fun PreviewControls(
                 Text("Reset view")
             }
         }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            preview.motionProfiles.forEach { motion ->
+                ToggleChip(
+                    label = motion.label,
+                    selected = motion.key == activeMotionProfile.key,
+                    onClick = { onMotionProfileChanged(motion.key) },
+                )
+            }
+        }
+        Text(
+            text = activeMotionProfile.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = InkSoft,
+        )
         Text(
             text = "Drag on the figure to rotate it, or scrub the fold progress below.",
             style = MaterialTheme.typography.bodySmall,
@@ -664,21 +692,24 @@ private fun lerpColor(start: Color, end: Color, t: Float): Color {
     )
 }
 
-private fun interpolatePreviewFaces(preview: PreviewModel, progress: Float): List<PreviewFace> {
-    if (preview.frames.isEmpty()) {
+private fun interpolatePreviewFaces(
+    motionProfile: PreviewMotionProfile,
+    progress: Float,
+): List<PreviewFace> {
+    if (motionProfile.frames.isEmpty()) {
         return emptyList()
     }
-    if (preview.frames.size == 1) {
-        return preview.frames.first().faces
+    if (motionProfile.frames.size == 1) {
+        return motionProfile.frames.first().faces
     }
 
     val clamped = progress.coerceIn(0f, 1f)
-    val scaled = clamped * (preview.frames.size - 1)
-    val lowerIndex = scaled.toInt().coerceIn(0, preview.frames.lastIndex)
-    val upperIndex = (lowerIndex + 1).coerceIn(0, preview.frames.lastIndex)
+    val scaled = clamped * (motionProfile.frames.size - 1)
+    val lowerIndex = scaled.toInt().coerceIn(0, motionProfile.frames.lastIndex)
+    val upperIndex = (lowerIndex + 1).coerceIn(0, motionProfile.frames.lastIndex)
     val fraction = (scaled - lowerIndex).coerceIn(0f, 1f)
-    val lower = preview.frames[lowerIndex]
-    val upper = preview.frames[upperIndex]
+    val lower = motionProfile.frames[lowerIndex]
+    val upper = motionProfile.frames[upperIndex]
 
     return lower.faces.zip(upper.faces).map { (left, right) ->
         PreviewFace(
@@ -1185,6 +1216,7 @@ data class MainUiState(
     val errorMessage: String? = null,
     val stageMode: StageMode = StageMode.SHEET,
     val previewProgress: Float = 1f,
+    val previewMotionProfile: String = DEFAULT_PREVIEW_MOTION_PROFILE,
     val cameraYaw: Float = DEFAULT_CAMERA_YAW,
     val cameraPitch: Float = DEFAULT_CAMERA_PITCH,
     val update: UpdateUiState = UpdateUiState(),
@@ -1266,6 +1298,27 @@ data class PreviewModel(
     val usesApproximateCycles: Boolean,
     val cycleDrift: Double?,
     val isMeshApproximation: Boolean,
+    val defaultMotionProfile: String,
+    val motionProfiles: List<PreviewMotionProfile>,
+) {
+    fun resolveMotionProfile(key: String): PreviewMotionProfile {
+        return motionProfiles.firstOrNull { it.key == key }
+            ?: motionProfiles.firstOrNull { it.key == defaultMotionProfile }
+            ?: motionProfiles.firstOrNull()
+            ?: PreviewMotionProfile(
+                key = DEFAULT_PREVIEW_MOTION_PROFILE,
+                label = "Balanced stack",
+                description = "",
+                bounds = PreviewBounds(0f, 0f, 0f, 0f, 0f, 0f),
+                frames = emptyList(),
+            )
+    }
+}
+
+data class PreviewMotionProfile(
+    val key: String,
+    val label: String,
+    val description: String,
     val bounds: PreviewBounds,
     val frames: List<PreviewFrame>,
 )
@@ -1358,6 +1411,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updatePreviewProgress(value: Float) {
         _uiState.update { it.copy(previewProgress = value.coerceIn(0f, 1f)) }
+    }
+
+    fun setPreviewMotionProfile(value: String) {
+        _uiState.update { state ->
+            val resolved = state.snapshot?.preview?.resolveMotionProfile(value)?.key
+                ?: DEFAULT_PREVIEW_MOTION_PROFILE
+            state.copy(previewMotionProfile = resolved)
+        }
     }
 
     fun adjustCamera(deltaX: Float, deltaY: Float) {
@@ -1481,12 +1542,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     block()
                 }
                 _uiState.update { state ->
+                    val resolvedPreviewMotionProfile = snapshot.preview
+                        ?.resolveMotionProfile(state.previewMotionProfile)
+                        ?.key
+                        ?: DEFAULT_PREVIEW_MOTION_PROFILE
                     state.copy(
                         snapshot = snapshot,
                         isBusy = false,
                         errorMessage = null,
                         stageMode = if (snapshot.preview != null) StageMode.PREVIEW else StageMode.SHEET,
                         previewProgress = if (snapshot.preview != null) 1f else 0f,
+                        previewMotionProfile = resolvedPreviewMotionProfile,
                         cameraYaw = DEFAULT_CAMERA_YAW,
                         cameraPitch = DEFAULT_CAMERA_PITCH,
                     )
@@ -1836,7 +1902,25 @@ private fun parseSnapshot(raw: String): MobileSnapshot {
             },
         ),
         preview = previewJson?.let { previewObject ->
-            val boundsJson = previewObject.getJSONObject("bounds")
+            val defaultMotionProfile = previewObject.optString("default_motion_profile")
+                .takeIf { it.isNotBlank() }
+                ?: DEFAULT_PREVIEW_MOTION_PROFILE
+            val motionProfilesJson = previewObject.optJSONArray("motion_profiles")
+            val motionProfiles = if (motionProfilesJson != null) {
+                stageArray(motionProfilesJson) { item ->
+                    parsePreviewMotionProfile(item)
+                }
+            } else {
+                listOf(
+                    PreviewMotionProfile(
+                        key = defaultMotionProfile,
+                        label = "Balanced stack",
+                        description = "",
+                        bounds = parsePreviewBounds(previewObject.getJSONObject("bounds")),
+                        frames = parsePreviewFrames(previewObject.getJSONArray("frames")),
+                    ),
+                )
+            }
             PreviewModel(
                 mode = previewObject.getString("mode"),
                 message = previewObject.getString("message"),
@@ -1845,32 +1929,8 @@ private fun parseSnapshot(raw: String): MobileSnapshot {
                 usesApproximateCycles = previewObject.getBoolean("uses_approximate_cycles"),
                 cycleDrift = previewObject.optDoubleOrNull("cycle_drift"),
                 isMeshApproximation = previewObject.getBoolean("is_mesh_approximation"),
-                bounds = PreviewBounds(
-                    minX = boundsJson.getDouble("min_x").toFloat(),
-                    maxX = boundsJson.getDouble("max_x").toFloat(),
-                    minY = boundsJson.getDouble("min_y").toFloat(),
-                    maxY = boundsJson.getDouble("max_y").toFloat(),
-                    minZ = boundsJson.getDouble("min_z").toFloat(),
-                    maxZ = boundsJson.getDouble("max_z").toFloat(),
-                ),
-                frames = stageArray(previewObject.getJSONArray("frames")) { frame ->
-                    PreviewFrame(
-                        progress = frame.getDouble("progress").toFloat(),
-                        faces = stageArray(frame.getJSONArray("faces")) { face ->
-                            PreviewFace(
-                                index = face.getInt("index"),
-                                topSurface = face.getBoolean("top_surface"),
-                                points = stageArray(face.getJSONArray("points")) { point ->
-                                    Point3(
-                                        x = point.getDouble("x").toFloat(),
-                                        y = point.getDouble("y").toFloat(),
-                                        z = point.getDouble("z").toFloat(),
-                                    )
-                                },
-                            )
-                        },
-                    )
-                },
+                defaultMotionProfile = defaultMotionProfile,
+                motionProfiles = motionProfiles,
             )
         },
         automation = automationJson?.let { item ->
@@ -1886,6 +1946,48 @@ private fun parseSnapshot(raw: String): MobileSnapshot {
             )
         },
     )
+}
+
+private fun parsePreviewMotionProfile(json: JSONObject): PreviewMotionProfile {
+    return PreviewMotionProfile(
+        key = json.getString("key"),
+        label = json.getString("label"),
+        description = json.optString("description"),
+        bounds = parsePreviewBounds(json.getJSONObject("bounds")),
+        frames = parsePreviewFrames(json.getJSONArray("frames")),
+    )
+}
+
+private fun parsePreviewBounds(json: JSONObject): PreviewBounds {
+    return PreviewBounds(
+        minX = json.getDouble("min_x").toFloat(),
+        maxX = json.getDouble("max_x").toFloat(),
+        minY = json.getDouble("min_y").toFloat(),
+        maxY = json.getDouble("max_y").toFloat(),
+        minZ = json.getDouble("min_z").toFloat(),
+        maxZ = json.getDouble("max_z").toFloat(),
+    )
+}
+
+private fun parsePreviewFrames(framesJson: JSONArray): List<PreviewFrame> {
+    return stageArray(framesJson) { frame ->
+        PreviewFrame(
+            progress = frame.getDouble("progress").toFloat(),
+            faces = stageArray(frame.getJSONArray("faces")) { face ->
+                PreviewFace(
+                    index = face.getInt("index"),
+                    topSurface = face.getBoolean("top_surface"),
+                    points = stageArray(face.getJSONArray("points")) { point ->
+                        Point3(
+                            x = point.getDouble("x").toFloat(),
+                            y = point.getDouble("y").toFloat(),
+                            z = point.getDouble("z").toFloat(),
+                        )
+                    },
+                )
+            },
+        )
+    }
 }
 
 private fun JSONObject.optStringOrNull(name: String): String? {
