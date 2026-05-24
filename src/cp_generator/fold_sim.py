@@ -5,7 +5,9 @@ from dataclasses import dataclass, replace
 import math
 
 import numpy as np
+from scipy.optimize import least_squares
 from scipy.spatial import Delaunay, QhullError
+from scipy.spatial.transform import Rotation, Slerp
 
 from . import core as cp
 
@@ -16,6 +18,7 @@ PREVIEW_MOTION_LEGACY_LAYERED = "legacy_layered"
 PREVIEW_MOTION_BALANCED_STACK = "balanced_stack"
 PREVIEW_MOTION_RIGID_PANELS = "rigid_panels"
 DEFAULT_PREVIEW_MOTION_PROFILE = PREVIEW_MOTION_LEGACY_LAYERED
+SEAMLESS_RIGID_SAMPLE_COUNT = 41
 
 
 class FoldSimulationError(RuntimeError):
@@ -85,8 +88,8 @@ EXACT_PREVIEW_MOTION_PROFILES = (
     ),
     PreviewMotionProfileSpec(
         key=PREVIEW_MOTION_RIGID_PANELS,
-        label="Rigid panels",
-        description="Keeps polygon faces rigid through the motion and avoids the flattened display stack.",
+        label="Seamless rigid",
+        description="Projects the exact fold motion onto a connected rigid-face path and lands on the complete folded figure.",
     ),
 )
 MESH_PREVIEW_MOTION_PROFILES = (
@@ -193,6 +196,7 @@ class FoldedFigureModel:
         self._balanced_stack_face_points = self._build_final_face_points(
             self._balanced_layer_offsets
         )
+        self._exact_folded_face_points = self.face_points_at_angle(math.pi)
         self._closed_face_points = self._relaxed_face_points(
             self.face_points_at_angle(self.max_angle),
             iterations=6,
@@ -205,6 +209,15 @@ class FoldedFigureModel:
         )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
         self.is_mesh_approximation = False
+        self._seamless_rigid_progress_samples = np.linspace(
+            0.0,
+            1.0,
+            SEAMLESS_RIGID_SAMPLE_COUNT,
+            dtype=float,
+        )
+        self._seamless_rigid_rotvec_samples: np.ndarray | None = None
+        self._seamless_rigid_translation_samples: np.ndarray | None = None
+        self._seamless_rigid_available = True
 
     def _build_layer_offsets(
         self,
@@ -322,6 +335,157 @@ class FoldedFigureModel:
             )
         return tuple(states)
 
+    def _legacy_rigid_panel_face_points(
+        self,
+        progress: float,
+        posed_points: tuple[np.ndarray, ...],
+    ) -> tuple[np.ndarray, ...]:
+        return self._relaxed_face_points(
+            posed_points,
+            iterations=4 if progress < 0.85 else 6,
+            strength=0.94,
+        )
+
+    def _ensure_seamless_rigid_motion(self) -> None:
+        if self._seamless_rigid_rotvec_samples is not None:
+            return
+        if not self._seamless_rigid_available:
+            return
+
+        try:
+            sample_count = len(self._seamless_rigid_progress_samples)
+            rotvec_samples = np.zeros((sample_count, self.face_count, 3), dtype=float)
+            translation_samples = np.zeros((sample_count, self.face_count, 3), dtype=float)
+            if self.face_count <= 1:
+                self._seamless_rigid_rotvec_samples = rotvec_samples
+                self._seamless_rigid_translation_samples = translation_samples
+                return
+
+            root_face = self.tree_order[0]
+            non_root_faces = tuple(
+                face_index for face_index in range(self.face_count) if face_index != root_face
+            )
+            if not non_root_faces:
+                self._seamless_rigid_rotvec_samples = rotvec_samples
+                self._seamless_rigid_translation_samples = translation_samples
+                return
+
+            final_rotations, final_translations = _fit_face_transforms(
+                self.source_face_points,
+                self._exact_folded_face_points,
+            )
+            final_parameters = _pack_face_transform_parameters(
+                final_rotations,
+                final_translations,
+                non_root_faces,
+            )
+            parameters = np.zeros_like(final_parameters)
+
+            for sample_index, raw_progress in enumerate(self._seamless_rigid_progress_samples):
+                if sample_index == 0:
+                    rotations, translations = _unpack_face_transform_parameters(
+                        parameters,
+                        self.face_count,
+                        root_face,
+                        non_root_faces,
+                    )
+                elif sample_index == sample_count - 1:
+                    rotations = final_rotations
+                    translations = final_translations
+                else:
+                    if raw_progress > 0.84:
+                        parameters = (1.0 - raw_progress) * parameters + raw_progress * final_parameters
+                    guide_points = self.face_points_at_angle(math.pi * _ease_in_out(float(raw_progress)))
+                    result = least_squares(
+                        _rigid_projection_residuals,
+                        parameters,
+                        args=(
+                            guide_points,
+                            self.source_face_points,
+                            self.vertex_occurrences,
+                            root_face,
+                            non_root_faces,
+                            130.0,
+                            0.34,
+                        ),
+                        max_nfev=400,
+                        xtol=1e-10,
+                        ftol=1e-10,
+                        gtol=1e-10,
+                    )
+                    parameters = result.x
+                    rotations, translations = _unpack_face_transform_parameters(
+                        parameters,
+                        self.face_count,
+                        root_face,
+                        non_root_faces,
+                    )
+                    projected_points = _apply_face_transforms(
+                        self.source_face_points,
+                        rotations,
+                        translations,
+                    )
+                    if (
+                        not result.success
+                        or _max_shared_edge_gap(self.face_edge_keys, projected_points) > 0.02
+                    ):
+                        self._seamless_rigid_available = False
+                        return
+
+                rotvec_samples[sample_index] = np.array(
+                    [Rotation.from_matrix(rotation).as_rotvec() for rotation in rotations],
+                    dtype=float,
+                )
+                translation_samples[sample_index] = np.array(translations, dtype=float)
+
+            self._seamless_rigid_rotvec_samples = rotvec_samples
+            self._seamless_rigid_translation_samples = translation_samples
+        except Exception:
+            self._seamless_rigid_available = False
+
+    def _seamless_rigid_face_points(
+        self,
+        progress: float,
+    ) -> tuple[np.ndarray, ...] | None:
+        self._ensure_seamless_rigid_motion()
+        if (
+            self._seamless_rigid_rotvec_samples is None
+            or self._seamless_rigid_translation_samples is None
+        ):
+            return None
+
+        progress = min(max(progress, 0.0), 1.0)
+        if progress <= 0.0:
+            return tuple(np.array(points, dtype=float, copy=True) for points in self.source_face_points)
+        if progress >= 1.0:
+            return tuple(
+                np.array(points, dtype=float, copy=True)
+                for points in self._exact_folded_face_points
+            )
+
+        upper_index = int(np.searchsorted(self._seamless_rigid_progress_samples, progress, side="right"))
+        lower_index = max(0, upper_index - 1)
+        upper_index = min(upper_index, len(self._seamless_rigid_progress_samples) - 1)
+
+        left_progress = float(self._seamless_rigid_progress_samples[lower_index])
+        right_progress = float(self._seamless_rigid_progress_samples[upper_index])
+        if upper_index == lower_index or right_progress - left_progress <= 1e-12:
+            return _apply_face_transform_samples(
+                self.source_face_points,
+                self._seamless_rigid_rotvec_samples[lower_index],
+                self._seamless_rigid_translation_samples[lower_index],
+            )
+
+        weight = (progress - left_progress) / (right_progress - left_progress)
+        return _interpolate_face_transform_samples(
+            self.source_face_points,
+            self._seamless_rigid_rotvec_samples[lower_index],
+            self._seamless_rigid_translation_samples[lower_index],
+            self._seamless_rigid_rotvec_samples[upper_index],
+            self._seamless_rigid_translation_samples[upper_index],
+            weight,
+        )
+
     def frame(
         self,
         progress: float,
@@ -345,12 +509,12 @@ class FoldedFigureModel:
             )
 
         if motion_profile == PREVIEW_MOTION_RIGID_PANELS:
-            relaxed = self._relaxed_face_points(
-                posed_points,
-                iterations=4 if progress < 0.85 else 6,
-                strength=0.94,
+            seamless = self._seamless_rigid_face_points(progress)
+            if seamless is not None:
+                return self._render_states(seamless)
+            return self._render_states(
+                self._legacy_rigid_panel_face_points(progress, posed_points)
             )
-            return self._render_states(relaxed)
 
         relaxed = self._relaxed_face_points(
             posed_points,
@@ -1267,7 +1431,34 @@ def _relax_face_points(
     return current
 
 
-def _fit_rigid_face(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+def _max_shared_edge_gap(
+    face_edge_keys: tuple[tuple[tuple[int, int], ...], ...],
+    points_by_face: tuple[np.ndarray, ...],
+) -> float:
+    edge_samples: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] = defaultdict(list)
+    for face_index, points in enumerate(points_by_face):
+        for local_index, edge_key in enumerate(face_edge_keys[face_index]):
+            next_index = (local_index + 1) % len(points)
+            edge_samples[edge_key].append((points[local_index], points[next_index]))
+
+    max_gap = 0.0
+    for samples in edge_samples.values():
+        if len(samples) != 2:
+            continue
+        (first_a, first_b), (second_a, second_b) = samples
+        direct = max(
+            float(np.linalg.norm(first_a - second_a)),
+            float(np.linalg.norm(first_b - second_b)),
+        )
+        flipped = max(
+            float(np.linalg.norm(first_a - second_b)),
+            float(np.linalg.norm(first_b - second_a)),
+        )
+        max_gap = max(max_gap, min(direct, flipped))
+    return max_gap
+
+
+def _fit_rigid_transform(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     if len(source) != len(target):
         raise FoldSimulationError("Rigid face fitting received mismatched point counts.")
 
@@ -1281,7 +1472,183 @@ def _fit_rigid_face(source: np.ndarray, target: np.ndarray) -> np.ndarray:
     if np.linalg.det(rotation) < 0:
         right_t[-1, :] *= -1
         rotation = right_t.T @ left.T
-    return centered_source @ rotation + target_centroid
+    translation = target_centroid - source_centroid @ rotation.T
+    return rotation, translation
+
+
+def _fit_rigid_face(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    rotation, translation = _fit_rigid_transform(source, target)
+    return source @ rotation.T + translation
+
+
+def _fit_face_transforms(
+    source_face_points: tuple[np.ndarray, ...],
+    target_face_points: tuple[np.ndarray, ...],
+) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+    rotations: list[np.ndarray] = []
+    translations: list[np.ndarray] = []
+    for source, target in zip(source_face_points, target_face_points):
+        rotation, translation = _fit_rigid_transform(source, target)
+        rotations.append(rotation)
+        translations.append(translation)
+    return tuple(rotations), tuple(translations)
+
+
+def _pack_face_transform_parameters(
+    rotations: tuple[np.ndarray, ...],
+    translations: tuple[np.ndarray, ...],
+    non_root_faces: tuple[int, ...],
+) -> np.ndarray:
+    parameters = np.zeros(len(non_root_faces) * 6, dtype=float)
+    for offset, face_index in enumerate(non_root_faces):
+        start = offset * 6
+        parameters[start : start + 3] = Rotation.from_matrix(rotations[face_index]).as_rotvec()
+        parameters[start + 3 : start + 6] = translations[face_index]
+    return parameters
+
+
+def _unpack_face_transform_parameters(
+    parameters: np.ndarray,
+    face_count: int,
+    root_face: int,
+    non_root_faces: tuple[int, ...],
+) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+    rotations: list[np.ndarray] = [np.identity(3) for _ in range(face_count)]
+    translations: list[np.ndarray] = [np.zeros(3, dtype=float) for _ in range(face_count)]
+    rotations[root_face] = np.identity(3)
+    translations[root_face] = np.zeros(3, dtype=float)
+    for offset, face_index in enumerate(non_root_faces):
+        start = offset * 6
+        rotations[face_index] = Rotation.from_rotvec(parameters[start : start + 3]).as_matrix()
+        translations[face_index] = np.array(
+            parameters[start + 3 : start + 6],
+            dtype=float,
+        )
+    return tuple(rotations), tuple(translations)
+
+
+def _apply_face_transforms(
+    source_face_points: tuple[np.ndarray, ...],
+    rotations: tuple[np.ndarray, ...],
+    translations: tuple[np.ndarray, ...],
+) -> tuple[np.ndarray, ...]:
+    return tuple(
+        source @ rotation.T + translation
+        for source, rotation, translation in zip(source_face_points, rotations, translations)
+    )
+
+
+def _apply_face_transform_samples(
+    source_face_points: tuple[np.ndarray, ...],
+    rotvecs: np.ndarray,
+    translations: np.ndarray,
+) -> tuple[np.ndarray, ...]:
+    rotations = tuple(
+        Rotation.from_rotvec(rotvec).as_matrix()
+        for rotvec in rotvecs
+    )
+    return _apply_face_transforms(
+        source_face_points,
+        rotations,
+        tuple(np.array(translation, dtype=float) for translation in translations),
+    )
+
+
+def _interpolate_face_transform_samples(
+    source_face_points: tuple[np.ndarray, ...],
+    left_rotvecs: np.ndarray,
+    left_translations: np.ndarray,
+    right_rotvecs: np.ndarray,
+    right_translations: np.ndarray,
+    weight: float,
+) -> tuple[np.ndarray, ...]:
+    weight = min(max(weight, 0.0), 1.0)
+    if weight <= 0.0:
+        return _apply_face_transform_samples(
+            source_face_points,
+            left_rotvecs,
+            left_translations,
+        )
+    if weight >= 1.0:
+        return _apply_face_transform_samples(
+            source_face_points,
+            right_rotvecs,
+            right_translations,
+        )
+
+    rotations: list[np.ndarray] = []
+    translations: list[np.ndarray] = []
+    for left_rotvec, right_rotvec, left_translation, right_translation in zip(
+        left_rotvecs,
+        right_rotvecs,
+        left_translations,
+        right_translations,
+    ):
+        if np.allclose(left_rotvec, right_rotvec, atol=1e-10):
+            rotation = Rotation.from_rotvec(left_rotvec).as_matrix()
+        else:
+            keyframes = Rotation.from_rotvec(
+                np.stack((left_rotvec, right_rotvec), axis=0)
+            )
+            rotation = Slerp([0.0, 1.0], keyframes)([weight]).as_matrix()[0]
+        rotations.append(rotation)
+        translations.append(
+            (1.0 - weight) * np.array(left_translation, dtype=float)
+            + weight * np.array(right_translation, dtype=float)
+        )
+
+    return _apply_face_transforms(
+        source_face_points,
+        tuple(rotations),
+        tuple(translations),
+    )
+
+
+def _rigid_projection_residuals(
+    parameters: np.ndarray,
+    guide_points: tuple[np.ndarray, ...],
+    source_face_points: tuple[np.ndarray, ...],
+    vertex_occurrences: tuple[tuple[tuple[int, int], ...], ...],
+    root_face: int,
+    non_root_faces: tuple[int, ...],
+    seam_weight: float,
+    guide_weight: float,
+) -> np.ndarray:
+    rotations, translations = _unpack_face_transform_parameters(
+        parameters,
+        len(source_face_points),
+        root_face,
+        non_root_faces,
+    )
+    posed_points = _apply_face_transforms(
+        source_face_points,
+        rotations,
+        translations,
+    )
+
+    residuals: list[float] = []
+    for occurrences in vertex_occurrences:
+        if len(occurrences) < 2:
+            continue
+        base_face, base_local_index = occurrences[0]
+        base_point = posed_points[base_face][base_local_index]
+        for face_index, local_index in occurrences[1:]:
+            residuals.extend(
+                (
+                    seam_weight
+                    * (posed_points[face_index][local_index] - base_point)
+                ).tolist()
+            )
+
+    for face_index in non_root_faces:
+        residuals.extend(
+            (
+                guide_weight
+                * (posed_points[face_index] - guide_points[face_index])
+            ).ravel().tolist()
+        )
+
+    return np.array(residuals, dtype=float)
 
 
 def _signed_area(coords: np.ndarray, face: tuple[int, ...] | list[int]) -> float:

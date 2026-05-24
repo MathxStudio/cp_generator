@@ -105,6 +105,39 @@ class FoldedFigureMotionTests(unittest.TestCase):
             ):
                 self.assertAlmostEqual(source_length, rendered_length, places=6)
 
+    def test_rigid_panels_closes_midfold_shared_edges(self) -> None:
+        pattern = _load_pattern("all_green")
+        model = fold_sim.build_folded_figure(pattern)
+
+        raw_points = model.face_points_at_angle(math.pi * 0.5)
+        raw_states = tuple(
+            fold_sim.FaceRenderState(
+                index=index,
+                points=points,
+                triangles=model.faces[index].triangles,
+                top_surface=True,
+            )
+            for index, points in enumerate(raw_points)
+        )
+        rigid_states = model.frame(0.5, motion_profile=fold_sim.PREVIEW_MOTION_RIGID_PANELS)
+
+        self.assertLess(_max_shared_edge_gap(model, rigid_states), 0.05)
+        self.assertLess(
+            _max_shared_edge_gap(model, rigid_states),
+            _max_shared_edge_gap(model, raw_states),
+        )
+
+    def test_rigid_panels_reaches_the_exact_folded_figure(self) -> None:
+        pattern = _load_pattern("all_green")
+        model = fold_sim.build_folded_figure(pattern)
+
+        final_states = model.frame(1.0, motion_profile=fold_sim.PREVIEW_MOTION_RIGID_PANELS)
+        exact_points = model.face_points_at_angle(math.pi)
+
+        self.assertLess(_max_shared_edge_gap(model, final_states), 1e-6)
+        for state, expected in zip(final_states, exact_points):
+            np.testing.assert_allclose(state.points, expected, atol=1e-6)
+
 
 if __name__ == "__main__":
     unittest.main()
