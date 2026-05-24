@@ -796,11 +796,56 @@ def _preview_payload(
     model: fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel,
     diagnostic: fold_sim.FoldSimulationDiagnostic,
 ) -> dict[str, object]:
+    supported_profiles = tuple(
+        getattr(
+            model,
+            "supported_motion_profiles",
+            (fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE,),
+        )
+    )
+    default_profile = fold_sim.resolve_motion_profile(
+        fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE,
+        supported_profiles,
+    )
+    motion_profiles = [
+        _preview_motion_profile_payload(model, motion_profile)
+        for motion_profile in supported_profiles
+    ]
+    default_variant = next(
+        (
+            variant
+            for variant in motion_profiles
+            if variant["key"] == default_profile
+        ),
+        motion_profiles[0],
+    )
+
+    return {
+        "mode": diagnostic.preview_mode,
+        "message": diagnostic.message,
+        "face_count": diagnostic.face_count,
+        "uses_provisional_signs": diagnostic.uses_provisional_signs,
+        "uses_approximate_cycles": diagnostic.uses_approximate_cycles,
+        "cycle_drift": diagnostic.cycle_drift,
+        "is_mesh_approximation": bool(getattr(model, "is_mesh_approximation", False)),
+        "basis": diagnostic.basis,
+        "heuristic_reasons": diagnostic.heuristic_reasons,
+        "default_motion_profile": default_profile,
+        "motion_profiles": motion_profiles,
+        "frames": default_variant["frames"],
+        "bounds": default_variant["bounds"],
+    }
+
+
+def _preview_motion_profile_payload(
+    model: fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel,
+    motion_profile: str,
+) -> dict[str, object]:
     frames = []
     all_points = []
     for step in range(PREVIEW_FRAME_COUNT):
         progress = 0.0 if PREVIEW_FRAME_COUNT == 1 else step / (PREVIEW_FRAME_COUNT - 1)
-        states = model.frame(progress)
+        states = model.frame(progress, motion_profile=motion_profile)
         faces = []
         for state in states:
             points = [
@@ -837,15 +882,9 @@ def _preview_payload(
         min_x = max_x = min_y = max_y = min_z = max_z = 0.0
 
     return {
-        "mode": diagnostic.preview_mode,
-        "message": diagnostic.message,
-        "face_count": diagnostic.face_count,
-        "uses_provisional_signs": diagnostic.uses_provisional_signs,
-        "uses_approximate_cycles": diagnostic.uses_approximate_cycles,
-        "cycle_drift": diagnostic.cycle_drift,
-        "is_mesh_approximation": bool(getattr(model, "is_mesh_approximation", False)),
-        "basis": diagnostic.basis,
-        "heuristic_reasons": diagnostic.heuristic_reasons,
+        "key": motion_profile,
+        "label": fold_sim.motion_profile_label(motion_profile),
+        "description": fold_sim.motion_profile_description(motion_profile),
         "frames": frames,
         "bounds": {
             "min_x": min_x,

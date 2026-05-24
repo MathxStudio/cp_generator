@@ -68,6 +68,7 @@ class SessionPayloadTests(unittest.TestCase):
             extra_state={
                 "show_labels": True,
                 "sidebar_width": 420,
+                "preview_motion_profile": "rigid_panels",
             },
         )
 
@@ -86,6 +87,7 @@ class SessionPayloadTests(unittest.TestCase):
             {
                 "show_labels": True,
                 "sidebar_width": 420,
+                "preview_motion_profile": "rigid_panels",
             },
         )
 
@@ -128,6 +130,34 @@ class DiagnosticMergingTests(unittest.TestCase):
         self.assertEqual(payload["point_count"], "5")
         self.assertEqual(payload["pattern"], pattern.to_data())
         self.assertEqual(payload["sidebar_width"], 360)
+
+
+class PreviewPayloadTests(unittest.TestCase):
+    def test_exact_preview_payload_lists_balanced_and_rigid_profiles(self) -> None:
+        pattern = _load_pattern("all_green")
+
+        preview = workflow.build_preview(pattern)
+
+        self.assertIsNotNone(preview.payload)
+        assert preview.payload is not None
+        self.assertEqual(preview.payload["default_motion_profile"], "legacy_layered")
+        self.assertEqual(
+            [profile["key"] for profile in preview.payload["motion_profiles"]],
+            ["legacy_layered", "balanced_stack", "rigid_panels"],
+        )
+
+    def test_mesh_preview_payload_only_lists_balanced_profile(self) -> None:
+        pattern = _load_pattern("crossing_folds")
+
+        preview = workflow.build_preview(pattern)
+
+        self.assertIsNotNone(preview.payload)
+        assert preview.payload is not None
+        self.assertEqual(preview.payload["default_motion_profile"], "legacy_layered")
+        self.assertEqual(
+            [profile["key"] for profile in preview.payload["motion_profiles"]],
+            ["legacy_layered", "balanced_stack"],
+        )
 
 
 class GeometryQualityTests(unittest.TestCase):

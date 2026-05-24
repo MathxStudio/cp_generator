@@ -117,7 +117,9 @@ class CPGeneratorApp:
         self.root.protocol("WM_DELETE_WINDOW", self._handle_close)
 
         self.pattern = cp.CreasePattern()
-        self.preview_model: fold_sim.FoldedFigureModel | None = None
+        self.preview_model: (
+            fold_sim.FoldedFigureModel | fold_sim.ApproximateFoldedFigureModel | None
+        ) = None
         self.preview_reference_pattern: cp.CreasePattern | None = None
         self.diagnostic_report: cp.PatternDiagnosticReport | None = None
         self.fold_simulation_diagnostic: fold_sim.FoldSimulationDiagnostic | None = None
@@ -141,7 +143,17 @@ class CPGeneratorApp:
         self.show_labels_var = tk.BooleanVar(value=False)
         self.preview_loop_var = tk.BooleanVar(value=True)
         self.preview_edge_families_var = tk.BooleanVar(value=False)
+        self.preview_profile_var = tk.StringVar(
+            value=fold_sim.motion_profile_label(
+                fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE
+            )
+        )
         self.preview_progress_var = tk.DoubleVar(value=0.0)
+        self._preview_motion_profile_preference = (
+            fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE
+        )
+        self._preview_profile_labels_by_key: dict[str, str] = {}
+        self._preview_profile_keys_by_label: dict[str, str] = {}
         self.vertex_count_var = tk.StringVar(value="0")
         self.fold_count_var = tk.StringVar(value="0")
         self.interior_count_var = tk.StringVar(value="0")
@@ -1353,9 +1365,36 @@ class CPGeneratorApp:
             row=0, column=1, sticky="w", padx=(16, 0)
         )
 
+        preview_mode_label = ttk.Label(
+            preview_toggles,
+            text="Motion style",
+            style="CardMuted.TLabel",
+        )
+        preview_mode_label.grid(row=1, column=0, sticky="w", pady=(10, 0))
+
+        self.preview_profile_combo = ttk.Combobox(
+            preview_toggles,
+            textvariable=self.preview_profile_var,
+            values=(
+                fold_sim.motion_profile_label(
+                    fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE
+                ),
+            ),
+            state="disabled",
+            style="Modern.TCombobox",
+            width=24,
+        )
+        self.preview_profile_combo.grid(
+            row=1, column=1, sticky="w", padx=(16, 0), pady=(10, 0)
+        )
+        self.preview_profile_combo.bind(
+            "<<ComboboxSelected>>",
+            self._on_preview_profile_selected,
+        )
+
         preview_hint = ttk.Label(
             preview_card,
-            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Cut-edge mode colors matching seam copies alike, including triangulated mesh cuts.",
+            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Legacy layered restores the original dissected fold preview, balanced stack is the newer seam-closing option, and rigid panels is exact-only.",
             style="CardMuted.TLabel",
             justify="left",
         )
@@ -1380,6 +1419,7 @@ class CPGeneratorApp:
                 self.preview_slider,
                 self.preview_loop_toggle,
                 self.preview_edge_families_toggle,
+                self.preview_profile_combo,
             ]
         )
         self._preview_widgets.extend(
@@ -1389,6 +1429,7 @@ class CPGeneratorApp:
                 self.preview_slider,
                 self.preview_loop_toggle,
                 self.preview_edge_families_toggle,
+                self.preview_profile_combo,
             ]
         )
 
@@ -1993,6 +2034,7 @@ class CPGeneratorApp:
         self.fold_simulation_diagnostic = result.diagnostic
         if result.preview_reference_pattern is not None:
             self.preview_reference_pattern = result.preview_reference_pattern
+        self._sync_preview_profile_options()
 
         if result.model is None:
             if result.diagnostic.status == cp.STATUS_NOT_RUN:
@@ -2097,8 +2139,59 @@ class CPGeneratorApp:
         for widget in self._preview_widgets:
             widget.state(state)
 
+        supported_profiles = self._available_preview_motion_profiles()
+        self.preview_profile_combo.configure(
+            state="readonly" if enabled and len(supported_profiles) > 1 else "disabled"
+        )
+
         if not enabled:
             self.preview_button_var.set("Play Fold")
+
+    def _available_preview_motion_profiles(self) -> tuple[str, ...]:
+        if self.preview_model is None:
+            return (fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE,)
+        return tuple(
+            getattr(
+                self.preview_model,
+                "supported_motion_profiles",
+                (fold_sim.DEFAULT_PREVIEW_MOTION_PROFILE,),
+            )
+        )
+
+    def _active_preview_motion_profile(self) -> str:
+        return fold_sim.resolve_motion_profile(
+            self._preview_motion_profile_preference,
+            self._available_preview_motion_profiles(),
+        )
+
+    def _sync_preview_profile_options(self) -> None:
+        supported_profiles = self._available_preview_motion_profiles()
+        self._preview_profile_labels_by_key = {
+            key: fold_sim.motion_profile_label(key)
+            for key in supported_profiles
+        }
+        self._preview_profile_keys_by_label = {
+            label: key
+            for key, label in self._preview_profile_labels_by_key.items()
+        }
+        self.preview_profile_combo.configure(
+            values=tuple(self._preview_profile_labels_by_key.values())
+        )
+        active_profile = self._active_preview_motion_profile()
+        self.preview_profile_var.set(
+            self._preview_profile_labels_by_key[active_profile]
+        )
+
+    def _on_preview_profile_selected(self, _event: tk.Event | None = None) -> None:
+        selected_key = self._preview_profile_keys_by_label.get(
+            self.preview_profile_var.get()
+        )
+        if selected_key is None:
+            return
+        self._preview_motion_profile_preference = selected_key
+        self._sync_preview_profile_options()
+        if self.preview_model is not None:
+            self._redraw_preview()
 
     def _update_preview_progress_text(self) -> None:
         progress = round(self.preview_progress_var.get() * 100)
@@ -3330,6 +3423,7 @@ class CPGeneratorApp:
                 "show_labels": bool(self.show_labels_var.get()),
                 "preview_loop": bool(self.preview_loop_var.get()),
                 "preview_edge_families": bool(self.preview_edge_families_var.get()),
+                "preview_motion_profile": self._preview_motion_profile_preference,
             },
         )
 
@@ -3354,6 +3448,9 @@ class CPGeneratorApp:
         self.preview_edge_families_var.set(
             bool(restored.extra_state.get("preview_edge_families", False))
         )
+        restored_preview_profile = restored.extra_state.get("preview_motion_profile")
+        if isinstance(restored_preview_profile, str) and restored_preview_profile:
+            self._preview_motion_profile_preference = restored_preview_profile
         self.fold_assignment_ready = restored.fold_assignment_ready
         self.preview_model = None
         self.preview_progress_var.set(0.0)
@@ -3523,7 +3620,11 @@ class CPGeneratorApp:
             )
             return
 
-        states = self.preview_model.frame(self.preview_progress_var.get())
+        active_motion_profile = self._active_preview_motion_profile()
+        states = self.preview_model.frame(
+            self.preview_progress_var.get(),
+            motion_profile=active_motion_profile,
+        )
         if not states:
             return
 
@@ -3573,6 +3674,7 @@ class CPGeneratorApp:
         for points in projected_states:
             screen_states.append([to_screen(point) for point in points])
 
+        faces_to_draw: list[tuple[float, list[float], str]] = []
         triangles_to_draw: list[tuple[float, list[float], str]] = []
         edge_segments: dict[
             tuple[int, int],
@@ -3604,13 +3706,18 @@ class CPGeneratorApp:
             )
             fill_color = self._shade_color(base_color, brightness)
 
-            for triangle in state.triangles:
-                triangle_points = [screen_points[index] for index in triangle]
-                triangle_depth = float(
-                    np.mean([view_points[index][2] for index in triangle])
-                )
-                flat_points = [coord for point in triangle_points for coord in point]
-                triangles_to_draw.append((triangle_depth, flat_points, fill_color))
+            if active_motion_profile == fold_sim.PREVIEW_MOTION_LEGACY_LAYERED:
+                for triangle in state.triangles:
+                    triangle_points = [screen_points[index] for index in triangle]
+                    triangle_depth = float(
+                        np.mean([view_points[index][2] for index in triangle])
+                    )
+                    flat_points = [coord for point in triangle_points for coord in point]
+                    triangles_to_draw.append((triangle_depth, flat_points, fill_color))
+            else:
+                face_depth = float(np.mean(view_points[:, 2]))
+                flat_points = [coord for point in screen_points for coord in point]
+                faces_to_draw.append((face_depth, flat_points, fill_color))
 
             face_edge_keys = getattr(self.preview_model, "face_edge_keys", ())
             edge_render_kind = getattr(self.preview_model, "edge_render_kind", {})
@@ -3633,16 +3740,28 @@ class CPGeneratorApp:
                         )
                     )
 
-        for _, flat_points, fill_color in sorted(
-            triangles_to_draw, key=lambda item: item[0]
-        ):
-            canvas.create_polygon(
-                *flat_points,
-                fill=fill_color,
-                outline=fill_color,
-                width=1.0,
-                joinstyle=tk.ROUND,
-            )
+        if active_motion_profile == fold_sim.PREVIEW_MOTION_LEGACY_LAYERED:
+            for _, flat_points, fill_color in sorted(
+                triangles_to_draw, key=lambda item: item[0]
+            ):
+                canvas.create_polygon(
+                    *flat_points,
+                    fill=fill_color,
+                    outline=fill_color,
+                    width=1.0,
+                    joinstyle=tk.ROUND,
+                )
+        else:
+            for _, flat_points, fill_color in sorted(
+                faces_to_draw, key=lambda item: item[0]
+            ):
+                canvas.create_polygon(
+                    *flat_points,
+                    fill=fill_color,
+                    outline=fill_color,
+                    width=1.0,
+                    joinstyle=tk.ROUND,
+                )
 
         if color_edge_families:
             segments_to_draw: list[
