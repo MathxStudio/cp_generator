@@ -384,12 +384,13 @@ score
 \operatorname{Score}(c)
 =
 0.05\,\#\set{e\in E:\tau_c(e)\in\set{0,1}}
-\sum_{v\in V}\Phi_v(c),
+\sum_{v\in V}\Phi_v(c)-4\,G(\tau_c),
 \]
 where $\Phi_v(c)$ rewards alternating mountain--valley patterns more than
-repeating ones, with sharper wedges weighted more heavily. This score is not a
-correctness condition; it is only a tie-breaker among already admissible
-assignments.
+repeating ones, with sharper wedges weighted more heavily, and where
+$G(\tau_c)$ counts the obtuse-angle defects defined in the next section. This
+score is not a correctness condition; it is only a tie-breaker among already
+admissible assignments.
 
 \begin{proposition}[What the assignment search certifies]
 If the routine returns an assignment $\tau^\ast$, then
@@ -404,6 +405,93 @@ satisfies Maekawa's theorem at every interior vertex.
 \begin{proof}
 The code checks every seed choice in $\set{0,1}^g$, rejects every choice
 violating Maekawa, and returns only from the surviving set.
+\end{proof}
+
+\section{Maekawa-preserving repair of obtuse monochrome glitches}
+
+Local Maekawa admissibility is still not enough to rule out every visibly bad
+mountain--valley pattern. The implementation now singles out one specific local
+configuration that repeatedly produced globally implausible flat stacks.
+
+\begin{definition}[Obtuse monochrome glitch]
+Let $v\in V_{\mathrm{int}}$, and let
+\[
+e_i,e_{i+1},e_{i+2}
+\]
+be three consecutive incident creases in cyclic order, with consecutive sector
+angles
+\[
+\beta_i,\beta_{i+1}.
+\]
+For a complete local assignment $\tau$, this triple is called an
+\emph{obtuse monochrome glitch} if
+\[
+\beta_i>\frac{\pi}{2},
+\qquad
+\beta_{i+1}>\frac{\pi}{2},
+\qquad
+\tau(e_i)=\tau(e_{i+2})\neq \tau(e_{i+1}).
+\]
+\end{definition}
+
+Equivalently, two consecutive obtuse wedges are bounded by a
+``same--different--same'' sign pattern. In the user-facing language of the
+program, the three creases should instead become monochromatic.
+
+\begin{definition}[Two monochromizing moves]
+For a glitch triple $(e_i,e_{i+1},e_{i+2})$, the code tests exactly two local
+updates:
+\[
+\text{(middle flip)}\qquad
+\tau'(e_{i+1})=\tau(e_i),
+\]
+and
+\[
+\text{(outer flip)}\qquad
+\tau''(e_i)=\tau''(e_{i+2})=\tau(e_{i+1}),
+\]
+with every other crease unchanged.
+\end{definition}
+
+Only one of these moves is accepted, and only when it preserves Maekawa's
+theorem not merely at $v$, but at every interior vertex.
+
+\begin{definition}[Accepted glitch repair]
+For a glitch triple $(e_i,e_{i+1},e_{i+2})$ at $v$, an update
+\[
+\tau\mapsto\widetilde\tau
+\]
+is \emph{accepted} if it is one of the two monochromizing moves above and
+\[
+\abs{\mu_{\widetilde\tau}(w)}=2
+\qquad
+\forall w\in V_{\mathrm{int}}.
+\]
+\end{definition}
+
+The repair loop then chooses among all accepted updates by the lexicographic
+rule
+\[
+\bigl(G(\widetilde\tau),\ \#\text{changed creases},\ \operatorname{Sig}(\widetilde\tau)\bigr),
+\]
+where smaller glitch count wins first, then fewer changed creases, then the
+assignment signature used by the code for deterministic tie-breaking. The loop
+repeats until no accepted update decreases $G$ or a previously seen signature
+would be revisited.
+
+\begin{proposition}[What the repair loop guarantees]
+If the obtuse-glitch repair routine terminates with assignment $\widehat\tau$,
+then every accepted intermediate update preserved
+Maekawa's theorem at all interior vertices, and the final assignment has no
+smaller reachable glitch count among the one-step accepted updates considered
+from the final state.
+\end{proposition}
+
+\begin{proof}
+Every candidate update is explicitly checked against Maekawa's theorem on every
+interior vertex before acceptance. The loop only commits an update when it
+strictly improves the current glitch count, and it halts once no such improving
+accepted update exists or a repeated signature would occur.
 \end{proof}
 
 \section{From local certificates to global geometry}
@@ -565,10 +653,103 @@ R_{(p,q)}\!\bigl(\operatorname{sgn}(e)\theta\bigr)T_f^{(3D)}.
 This rigid-hinge viewpoint is the standard rigid-plate abstraction used for the
 preview stage; compare the rigid-origami literature {\cite{abel_rigid}}.
 
-If exact face reconstruction fails, the project falls back to a triangle-mesh
-preview. In that mode the domain is triangulated and propagated along a tree of
-triangle adjacencies. This is still useful visually, but it is intentionally
-marked as non-certifying.
+The current implementation exposes three exact-preview motion families.
+
+\paragraph{Legacy layered.}
+Let $\eta(t)$ be the easing profile and let $\theta_{\max}<\pi$ be the preview
+fold limit used for nonfinal frames. If
+\[
+P_f^{\mathrm{tree}}(t)
+=
+T_f^{(3D)}\bigl(\theta_{\max}\eta(t)\bigr)(X_f)
+\]
+is the posed rigid face and $L_f$ is the separated flat stack used for the
+layered finish, then legacy layered renders
+\[
+P_f^{\mathrm{legacy}}(t)
+=
+\bigl(1-s_{\mathrm{legacy}}(t)\bigr)P_f^{\mathrm{tree}}(t)
++
+s_{\mathrm{legacy}}(t)L_f
+\]
+with a late-time blend factor $s_{\mathrm{legacy}}$.
+
+\paragraph{Balanced stack.}
+This mode applies a rigid seam-closing relaxation operator
+\[
+\mathcal R\bigl(P^{\mathrm{tree}}(t)\bigr)
+\]
+before the final blend. Concretely, shared vertices are averaged across
+incident faces, and each face is rigidly refit to those averaged targets. The
+rendered configuration is
+\[
+P_f^{\mathrm{bal}}(t)
+=
+\bigl(1-s_{\mathrm{bal}}(t)\bigr)\mathcal R\bigl(P^{\mathrm{tree}}(t)\bigr)_f
++
+s_{\mathrm{bal}}(t)B_f,
+\]
+where $B_f$ is a thinner final stack than in legacy layered mode.
+
+\paragraph{Seamless rigid.}
+This exact-only mode targets the complete folded figure itself. Let
+\[
+F_f^\star = P_f^{\mathrm{tree}}(1)=P_f(\pi)
+\]
+be the exact final folded face points, and let
+\[
+t_0,\dots,t_{12}\in[0,1]
+\]
+be the discrete sample times used by the cache. For each sample time $t_j$, the
+code first builds guide points
+\[
+G_f(t_j)=P_f\!\bigl(\pi\,\eta(t_j)\bigr)
+\]
+and rigidly fits them facewise to obtain guide rotations
+\[
+\widehat R_{f,j}.
+\]
+It then solves for rigid transforms $(R_{f,j},u_{f,j})$ minimizing a weighted
+sum of three residual families:
+\begin{align}
+\mathcal E_j
+&=
+\lambda_{\mathrm{seam}}
+\sum_{\text{shared vertices }x}
+\norm{(R_{f,j}x+u_{f,j})-(R_{g,j}x+u_{g,j})}^2
+\notag\\
+&\quad
++
+\lambda_{\mathrm{guide}}
+\sum_f \norm{R_{f,j}X_f+u_{f,j}-G_f(t_j)}_F^2
+\notag\\
+&\quad
++
+\lambda_{\mathrm{hinge}}
+\sum_{(f,g)\text{ fold-adjacent}}
+\norm{
+\log\!\Bigl(
+(R_{g,j}R_{f,j}^{\top})
+(\widehat R_{g,j}\widehat R_{f,j}^{\top})^{\top}
+\Bigr)
+}^2.
+\label{eq:seamless-rigid}
+\end{align}
+The first term closes seams, the second keeps the sample near the exact fold
+guide, and the third preserves the relative hinge rotation suggested by that
+guide.
+
+A sample is accepted whenever its maximum shared-edge mismatch stays below the
+implemented threshold. Between accepted samples, rotations are interpolated by
+spherical linear interpolation and translations by linear interpolation. If a
+sample fails, the renderer holds the nearest solved exact sample rather than
+dropping back to the older gappy panel relaxation. At $t=1$, the output is
+exactly $F_f^\star$.
+
+If exact face reconstruction itself fails, the project falls back to a
+triangle-mesh preview. In that mode the domain is triangulated and propagated
+along a tree of triangle adjacencies. This is still useful visually, but it is
+intentionally marked as non-certifying.
 
 \section{Status predicates}
 

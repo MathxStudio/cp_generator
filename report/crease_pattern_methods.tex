@@ -227,10 +227,50 @@ Each vertex reduction yields sign chains:
 \column{0.44\textwidth}
 \begin{block}{Interlacing preference}
 \small Among admissible assignments, prefer
-\(M,V,M,V,\ldots\) over \(M,M,V,V,\ldots\); weight sharper wedges more.\\[4pt]
+\(M,V,M,V,\ldots\) over \(M,M,V,V,\ldots\), weight sharper wedges more,
+and subtract a large penalty for the obtuse same--different--same defects on
+the next slide.\\[4pt]
 \alert{Does not affect correctness.}
 \end{block}
 \end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm IIIb — Repairing obtuse-angle glitches}
+\begin{columns}[T,onlytextwidth]
+\column{0.54\textwidth}
+\begin{block}{Glitch pattern}
+\footnotesize For consecutive creases \(e_i,e_{i+1},e_{i+2}\) with consecutive
+sector angles \(\beta_i,\beta_{i+1}\),
+\[
+\beta_i,\beta_{i+1}>\frac{\pi}{2},
+\qquad
+\sigma(e_i)=\sigma(e_{i+2})\neq \sigma(e_{i+1}),
+\]
+the code flags a local ``same--different--same'' obstruction across two
+consecutive obtuse wedges.
+\end{block}
+
+\column{0.42\textwidth}
+\begin{alertblock}{Maekawa-preserving fix}
+\footnotesize Test exactly two monochromizing moves:
+\[
+\sigma(e_{i+1})\leftarrow \sigma(e_i)
+\quad\text{or}\quad
+\sigma(e_i),\sigma(e_{i+2})\leftarrow \sigma(e_{i+1}).
+\]
+Keep only a move that still satisfies
+\[
+\abs{M(v)-V(v)}=2
+\]
+at every interior vertex, then iterate while the total glitch count drops.
+\end{alertblock}
+\end{columns}
+
+\smallskip
+\footnotesize This is a targeted repair for a local/global mismatch: Maekawa
+alone may pass even though the resulting flat stack is visually and
+combinatorially implausible.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
@@ -264,6 +304,53 @@ T_{\text{child}} = R_{(p,q)}\!\bigl(\sigma(e)\,\theta\bigr)\,T_{\text{parent}}.
 Triangulation is only for rendering, and small normal offsets keep layers
 visible near full closure.
 \end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm IVb — Exact preview motion families}
+\begin{columns}[T,onlytextwidth]
+\column{0.50\textwidth}
+\begin{block}{Legacy layered}
+\footnotesize Render the exact tree pose and blend late into a separated flat
+stack:
+\[
+P_f^{\mathrm{legacy}}(t)
+=
+\bigl(1-s(t)\bigr)P_f^{\mathrm{tree}}(t)+s(t)L_f.
+\]
+\end{block}
+
+\begin{block}{Balanced stack}
+\footnotesize Close seams by averaging shared vertices and rigidly refitting
+each face, then blend to a thinner final stack:
+\[
+P_f^{\mathrm{bal}}(t)
+=
+\bigl(1-s(t)\bigr)\mathcal R(P^{\mathrm{tree}}(t))_f+s(t)B_f.
+\]
+\end{block}
+
+\column{0.46\textwidth}
+\begin{alertblock}{Seamless rigid}
+\footnotesize At sample times \(t_j\), solve per-face rigid transforms by
+\[
+\min \lambda_s E_{\mathrm{seam}}
++\lambda_g E_{\mathrm{guide}}
++\lambda_h E_{\mathrm{hinge}},
+\]
+so seams close, faces stay near the exact guide pose, and neighboring faces
+track the guide hinge rotation.
+
+\smallskip
+Accepted samples are interpolated by SLERP. If one sample fails, hold the
+nearest solved exact sample instead of jumping to the older gappy fallback.
+At \(t=1\), render the exact folded figure.
+\end{alertblock}
+\end{columns}
+
+\smallskip
+\footnotesize If exact face reconstruction itself fails, the app still drops to
+the guarded triangle-mesh preview.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────

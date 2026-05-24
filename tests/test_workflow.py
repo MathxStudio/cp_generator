@@ -133,6 +133,18 @@ class DiagnosticMergingTests(unittest.TestCase):
 
 
 class PreviewPayloadTests(unittest.TestCase):
+    def test_build_preview_can_skip_serialized_payload_generation(self) -> None:
+        pattern = _load_pattern("all_green")
+
+        with mock.patch(
+            "cp_generator.workflow._preview_payload",
+            side_effect=AssertionError("payload generation should be skipped"),
+        ):
+            preview = workflow.build_preview(pattern, include_payload=False)
+
+        self.assertIsNotNone(preview.model)
+        self.assertIsNone(preview.payload)
+
     def test_exact_preview_payload_lists_balanced_and_rigid_profiles(self) -> None:
         pattern = _load_pattern("all_green")
 

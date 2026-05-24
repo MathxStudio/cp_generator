@@ -2030,6 +2030,7 @@ class CPGeneratorApp:
             preview_reference_pattern=self.preview_reference_pattern,
             allow_reference_fallback=True,
             spatial_mode=False,
+            include_payload=False,
         )
         self.preview_model = result.model
         self.fold_simulation_diagnostic = result.diagnostic
@@ -3344,7 +3345,7 @@ class CPGeneratorApp:
         self, pattern: cp.CreasePattern
     ) -> cp.PatternDiagnosticReport:
         report = pattern.analyze_pattern()
-        preview = workflow.build_preview(pattern, spatial_mode=True)
+        preview = workflow.build_preview(pattern, spatial_mode=True, include_payload=False)
         return workflow.merge_report_with_preview(report, preview.diagnostic)
 
     def _current_point_count_hint(self, fallback: int | None = None) -> int:
