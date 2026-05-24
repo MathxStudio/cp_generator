@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import math
+import sys
 import tkinter as tk
 from tkinter import filedialog, ttk
 from tkinter import font as tkfont
@@ -4057,11 +4058,17 @@ class CPGeneratorApp:
         return self.COLORS["neutral_fold"]
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--smoke-test" in args:
+        print("CP Generator smoke test OK")
+        return 0
+
     root = tk.Tk()
     CPGeneratorApp(root)
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

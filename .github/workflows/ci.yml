@@ -74,6 +74,37 @@ jobs:
           print(f"Wheel import smoke test passed with {len(cases)} validation cases.")
           PY
 
+  desktop-portable-smoke:
+    name: desktop-portable-smoke
+    runs-on: ubuntu-latest
+    needs:
+      - python-validation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y python3-tk libcairo2 libcairo2-dev pkg-config
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Sync dependencies
+        run: uv sync --all-groups
+
+      - name: Freeze Linux portable app
+        run: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+
+      - name: Smoke-test frozen launcher
+        run: dist/CPGenerator/CPGenerator --smoke-test
+
   android-validation:
     name: android-validation
     runs-on: ubuntu-latest
