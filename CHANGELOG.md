@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-05-24
+
+### Fixed
+- Repaired the two-obtuse-angle mountain/valley glitch by forcing a Maekawa-safe monochrome resolution when a conflicting middle crease blocks flat folding.
+- Added regression coverage for the obtuse-angle repair pass and its integration into `assign_mv()`.
+
 ## [0.3.0] - 2026-05-23
 
 ### Added
