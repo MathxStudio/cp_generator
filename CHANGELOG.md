@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-24
+
+### Fixed
+- Replaced the exact `Seamless rigid` 3D preview path with a seam-closed rigid continuation that keeps faces connected throughout the motion and lands on the complete exact folded figure.
+- Added regression coverage so the exact rigid preview stays edge-connected mid-motion and reaches the exact folded endpoint instead of stalling in the earlier near-flat relaxation.
+
 ## [0.3.3] - 2026-05-24
 
 ### Fixed
