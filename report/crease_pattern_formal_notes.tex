@@ -138,6 +138,69 @@ This Delaunay stage is not itself a flat-foldability theorem. Its role is to
 provide a planar graph with reasonably regular local geometry so that the later
 angle constraints are numerically meaningful.
 
+\section{Workflow-level genericity guard}
+
+The local flat-foldability equations alone do not prevent a numerically
+collapsed sample in which two vertices become arbitrarily close. The workflow
+therefore adds a scale-normalized geometric genericity test before it accepts a
+sample as ``green''.
+
+\begin{definition}[Minimum vertex separation]
+For an embedded pattern $\CP=(G,X,\tau)$ on a square of side length $s$, define
+\[
+\delta_{\min}(X)
+=
+\min_{\substack{u,v\in V\\u\ne v}}
+\norm{X_u-X_v},
+\qquad
+\rho(X)=\frac{\delta_{\min}(X)}{s}.
+\]
+\end{definition}
+
+\begin{definition}[Implemented generic-geometry predicate]
+The workflow fixes the ratio threshold
+\[
+\rho_{\min}=10^{-3}.
+\]
+It calls the geometry \emph{generic} when
+\[
+\delta_{\min}(X)\ge \rho_{\min}s.
+\]
+Equivalently,
+\[
+\operatorname{Generic}(X)
+\Longleftrightarrow
+\rho(X)\ge 10^{-3}.
+\]
+\end{definition}
+
+The pattern generator retries up to a fixed maximum number of random samples
+and returns the first generic one. If no generic sample is found, it keeps the
+best available sample, namely the one maximizing $\delta_{\min}(X)$ among those
+attempts. Likewise, the local optimizer is declared ``green'' only when
+\[
+\operatorname{Local}(\CP;\eps)
+\quad\text{and}\quad
+\operatorname{Generic}(X)
+\]
+hold simultaneously.
+
+\begin{definition}[Workflow-level local green]
+The workflow-level local success predicate is
+\[
+\operatorname{LocalGreen}(\CP;\eps)
+\Longleftrightarrow
+\operatorname{Local}(\CP;\eps)\wedge \operatorname{Generic}(X).
+\]
+\end{definition}
+
+\begin{remark}
+This genericity guard is not a theorem from classical origami theory. It is an
+implemented numerical nondegeneracy assumption, used to reject nearly
+coincident vertices for which angle diagnostics and later exact-face reasoning
+become unstable.
+\end{remark}
+
 \section{The local flat-foldability conditions}
 
 The next stage turns the geometric candidate graph into a constrained origami
@@ -639,6 +702,171 @@ This theorem describes the strongest global statement currently certified by the
 code. It is a theorem about the \emph{current embedding}, not a complete
 classification theorem for all embeddings with the same combinatorics.
 
+\section{Bounded exact stack-order checking}
+
+The exact preview solver reconstructs faces and rigid transforms, but it does
+not by itself enumerate all possible flat overlap orders. For sufficiently
+small exact instances, the project therefore runs a separate bounded exact
+checker on the extracted face arrangement.
+
+\begin{definition}[Bounded-check prerequisites]
+The bounded checker runs only if all of the following hold:
+\begin{enumerate}
+    \item $\operatorname{Status}_{\mathrm{local}}(\CP)=\Pass$,
+    \item $\operatorname{Status}_{\mathrm{assign}}(\CP)=\Pass$,
+    \item $\operatorname{Noncross}(X)$,
+    \item exact face reconstruction succeeds,
+    \item no provisional fold signs are used,
+    \item no approximate cycle closure is used, and
+    \item the extracted face count satisfies
+    \[
+    \abs{\mathcal F}\le F_{\max},
+    \qquad
+    F_{\max}=8
+    \]
+    in the current implementation.
+\end{enumerate}
+\end{definition}
+
+The checker compares faces in a near-flat, but still slightly separated, rigid
+pose. The implemented angle is
+\[
+\theta_{\mathrm{nf}}=\pi-0.08.
+\]
+Let
+\[
+P_f^{\mathrm{nf}}\subset\RR^3
+\]
+be the points of face $f$ at angle $\theta_{\mathrm{nf}}$, and let
+\[
+\overline P_f\subset\RR^2
+\]
+be the corresponding exact final flat projection.
+
+\begin{definition}[Overlap cell]
+Let $T\subset \overline P_f$ and $U\subset \overline P_g$ be triangles from the
+face triangulations. Their \emph{overlap cell} is the convex polygon
+\[
+C(T,U)=T\cap U
+\]
+computed by polygon clipping. Cells of area at most
+\[
+\eps_{\mathrm{area}}=10^{-8}
+\]
+are discarded.
+\end{definition}
+
+For each nontrivial overlap cell, the code samples the centroid
+\[
+c(T,U)\in C(T,U)
+\]
+and interpolates the two near-flat heights
+\[
+z_f\bigl(c(T,U)\bigr),
+\qquad
+z_g\bigl(c(T,U)\bigr)
+\]
+from the corresponding 3-dimensional triangles by barycentric coordinates.
+
+\begin{definition}[Pairwise overlap-order relation]
+For two distinct faces $f,g$, if every overlap cell between them satisfies
+\[
+z_f(c)-z_g(c)>\eps_z,
+\qquad
+\eps_z=10^{-7},
+\]
+then the checker records the relation
+\[
+f\succ g.
+\]
+If every overlap cell instead satisfies
+\[
+z_g(c)-z_f(c)>\eps_z,
+\]
+it records
+\[
+g\succ f.
+\]
+If some overlap cells reverse the sign, or if
+\[
+\abs{z_f(c)-z_g(c)}\le \eps_z
+\]
+on a nontrivial overlap, the checker fails immediately.
+\end{definition}
+
+Thus the checker constructs a directed relation
+\[
+R\subset \mathcal F\times\mathcal F,
+\]
+interpreted as a partial overlap order on faces. The bounded exact problem is
+then whether $R$ admits a linear extension.
+
+\begin{definition}[Bounded stack order]
+A \emph{bounded stack order} for the extracted arrangement is a permutation
+\[
+(f_{i_1},\dots,f_{i_m})
+\]
+of $\mathcal F$ such that
+\[
+(f,g)\in R
+\Longrightarrow
+f \text{ appears before } g.
+\]
+\end{definition}
+
+The implementation counts bounded stack orders by a bitmask dynamic program. If
+\[
+\operatorname{Pred}(f)=\set{g:(g,f)\in R},
+\]
+and if $N(S)$ denotes the number of admissible completions from the already
+placed face set $S\subseteq\mathcal F$, then
+\[
+N(S)=
+\sum_{\substack{f\in \mathcal F\setminus S\\ \operatorname{Pred}(f)\subseteq S}}
+N(S\cup\set{f}),
+\qquad
+N(\mathcal F)=1.
+\]
+The count is truncated above by
+\[
+N_{\max}=100000.
+\]
+
+\begin{proposition}[Meaning of a bounded exact-check pass]
+If the bounded checker returns $\Pass$, then the extracted relation $R$ admits
+at least one bounded stack order. If it returns $\Pass$ with unique-order flag,
+then exactly one bounded stack order was found before the truncation limit was
+reached.
+\end{proposition}
+
+\begin{proof}
+The dynamic program above counts precisely the linear extensions of the
+predecessor relation encoded by $R$, truncated only when the count exceeds
+$N_{\max}$. A positive count therefore certifies existence of at least one
+linear extension, and count $1$ certifies uniqueness.
+\end{proof}
+
+\begin{proposition}[Meaning of a cyclic bounded failure]
+If the bounded checker returns failure with message ``cyclic stack-order
+constraint'', then the extracted relation $R$ has no linear extension, hence no
+bounded stack order compatible with all sampled overlap constraints.
+\end{proposition}
+
+\begin{proof}
+The cited failure branch is reached exactly when the topological-order counter
+returns $0$. A directed acyclic predecessor relation has at least one linear
+extension, so zero count means that the extracted overlap-order constraints are
+incompatible.
+\end{proof}
+
+\begin{remark}
+This bounded checker is still not a complete global flat-foldability algorithm.
+It is a small-instance certificate on the exact face arrangement actually
+constructed by the solver, and it is philosophically closest to the
+overlap-order viewpoint used in the flat-folding complexity literature
+{\cite{bern_hayes,eppstein_flat}}.
+\end{remark}
+
 \section{3D folding and fallback preview}
 
 Once exact face reconstruction is available, the project builds a kinematic 3D
@@ -651,105 +879,650 @@ T_g^{(3D)}
 R_{(p,q)}\!\bigl(\operatorname{sgn}(e)\theta\bigr)T_f^{(3D)}.
 \]
 This rigid-hinge viewpoint is the standard rigid-plate abstraction used for the
-preview stage; compare the rigid-origami literature {\cite{abel_rigid}}.
+preview stage; compare the rigid-origami literature
+{\cite{abel_rigid,tachi_simulation}}.
 
-The current implementation exposes three exact-preview motion families.
-
-\paragraph{Legacy layered.}
-Let $\eta(t)$ be the easing profile and let $\theta_{\max}<\pi$ be the preview
-fold limit used for nonfinal frames. If
+For time parameter $t\in[0,1]$, the implementation uses the easing profile
+\[
+\eta(t)=\frac{1-\cos(\pi t)}{2},
+\]
+and for any settle window $[a,b]\subseteq[0,1]$ it uses the smoothstep blend
+\[
+s_{a,b}(t)=
+\begin{cases}
+0,& t\le a,\\[2mm]
+3u(t)^2-2u(t)^3,& a\le t\le b,\quad
+u(t)=\dfrac{t-a}{b-a},\\[2mm]
+1,& t\ge b.
+\end{cases}
+\]
+Let $\Pi:\RR^3\to\RR^2$ be projection to the $(x,y)$-plane, let $X_f$ denote
+the ordered source vertices of face $f$ with initial $z$-coordinate $0$, and
+define the two exact rigid guides
 \[
 P_f^{\mathrm{tree}}(t)
 =
-T_f^{(3D)}\bigl(\theta_{\max}\eta(t)\bigr)(X_f)
+T_f^{(3D)}\bigl((\pi-0.1)\eta(t)\bigr)(X_f),
+\qquad
+P_f^{\mathrm{exact}}(t)
+=
+T_f^{(3D)}\bigl(\pi\eta(t)\bigr)(X_f).
 \]
-is the posed rigid face and $L_f$ is the separated flat stack used for the
-layered finish, then legacy layered renders
+We also write
+\[
+P^{\mathrm{tree}}(t)=\bigl(P_f^{\mathrm{tree}}(t)\bigr)_{f\in\mathcal F},
+\qquad
+P^{\mathrm{exact}}(t)=\bigl(P_f^{\mathrm{exact}}(t)\bigr)_{f\in\mathcal F}
+\]
+for the corresponding facewise families.
+The first is the capped tree pose used for the display-oriented legacy and
+balanced modes; the second is the full exact folded guide used by the seamless
+rigid mode.
+
+\begin{definition}[Rigid face fit]
+For a face $f$ and a target point set
+\[
+Y_f=(y_{f,1},\dots,y_{f,m_f})\in(\RR^3)^{m_f},
+\]
+the implemented rigid fit is
+\[
+\operatorname{RigidFit}(X_f,Y_f)=R_fX_f+u_f,
+\]
+where $(R_f,u_f)\in SO(3)\times\RR^3$ minimizes
+\[
+\sum_{i=1}^{m_f}\norm{R_fx_{f,i}+u_f-y_{f,i}}^2.
+\]
+Numerically this is the usual orthogonal Procrustes / Kabsch solve with the
+reflection branch removed.
+\end{definition}
+
+\begin{lemma}[Rigid fit preserves face geometry]
+For every $f$ and every target point set $Y_f$, the point set
+\[
+\operatorname{RigidFit}(X_f,Y_f)
+\]
+is congruent to $X_f$. In particular, for every pair of indices $i,j$,
+\[
+\norm{\bigl(\operatorname{RigidFit}(X_f,Y_f)\bigr)_i
+-\bigl(\operatorname{RigidFit}(X_f,Y_f)\bigr)_j}
+=
+\norm{x_{f,i}-x_{f,j}}.
+\]
+\end{lemma}
+
+\begin{proof}
+By definition,
+\[
+\bigl(\operatorname{RigidFit}(X_f,Y_f)\bigr)_i
+=
+R_fx_{f,i}+u_f
+\]
+with $R_f\in SO(3)$. Hence
+\[
+\norm{(R_fx_{f,i}+u_f)-(R_fx_{f,j}+u_f)}
+=
+\norm{R_f(x_{f,i}-x_{f,j})}
+=
+\norm{x_{f,i}-x_{f,j}},
+\]
+because orthogonal matrices preserve Euclidean norm.
+\end{proof}
+
+\subsection*{Legacy layered}
+
+\paragraph{Intuition.}
+Legacy layered is the most conservative display mode. For most of the animation
+it simply shows the original tree-based rigid fold. Only near the end does it
+peel the faces apart into a visibly separated flat stack, so that the final
+layer order is easy to read even when many faces would otherwise collapse onto
+the same plane. The price is that the final peel-away is a display blend, not a
+physically rigid motion.
+
+\begin{definition}[Legacy layered stack]
+Let $m=\abs{\mathcal F}$. Evaluate the nearly-flat exact pose at angle
+\[
+\theta_{\mathrm{nf}}=\pi-0.08.
+\]
+For each face $f$, let $(x_f^{\mathrm{nf}},y_f^{\mathrm{nf}},z_f^{\mathrm{nf}})$
+be the centroid of
+\[
+T_f^{(3D)}(\theta_{\mathrm{nf}})(X_f).
+\]
+Order the
+faces by the lexicographic key
+\[
+\bigl(z_f^{\mathrm{nf}},y_f^{\mathrm{nf}},x_f^{\mathrm{nf}}\bigr),
+\]
+and let $r(f)\in\set{0,\dots,m-1}$ be the resulting rank. With
+\[
+\operatorname{span}(X)
+=
+\bigl(\max_i X_i^{(1)}-\min_i X_i^{(1)}\bigr)
++
+\bigl(\max_i X_i^{(2)}-\min_i X_i^{(2)}\bigr),
+\]
+define the implemented legacy spacing
+\[
+\Delta_{\mathrm{leg}}
+=
+\max\left\{
+\frac{\operatorname{span}(X)}{18m},
+0.02
+\right\},
+\qquad
+h_f^{\mathrm{leg}}
+=
+\Delta_{\mathrm{leg}}
+\left(r(f)-\frac{m-1}{2}\right).
+\]
+If $\Phi_f^{\mathrm{flat}}:\RR^2\to\RR^2$ is the exact flat transform of face
+$f$, the legacy target stack is
+\[
+L_f
+=
+\Bigl\{
+\bigl(\Phi_f^{\mathrm{flat}}(\Pi(x_{f,i})),h_f^{\mathrm{leg}}\bigr)
+\Bigr\}_{i=1}^{m_f}.
+\]
+The rendered legacy motion is
 \[
 P_f^{\mathrm{legacy}}(t)
 =
-\bigl(1-s_{\mathrm{legacy}}(t)\bigr)P_f^{\mathrm{tree}}(t)
+\bigl(1-s_{0.72,1}(t)\bigr)P_f^{\mathrm{tree}}(t)
 +
-s_{\mathrm{legacy}}(t)L_f
+s_{0.72,1}(t)L_f.
 \]
-with a late-time blend factor $s_{\mathrm{legacy}}$.
+\end{definition}
 
-\paragraph{Balanced stack.}
-This mode applies a rigid seam-closing relaxation operator
+\begin{proposition}[Legacy layered endpoints]
+For every face $f$,
 \[
-\mathcal R\bigl(P^{\mathrm{tree}}(t)\bigr)
+P_f^{\mathrm{legacy}}(0)=X_f,
+\qquad
+P_f^{\mathrm{legacy}}(t)=P_f^{\mathrm{tree}}(t)
+\text{ for }0\le t\le 0.72,
+\qquad
+P_f^{\mathrm{legacy}}(1)=L_f.
 \]
-before the final blend. Concretely, shared vertices are averaged across
-incident faces, and each face is rigidly refit to those averaged targets. The
-rendered configuration is
+Moreover the path $t\mapsto P_f^{\mathrm{legacy}}(t)$ is continuous on
+$[0,1]$.
+\end{proposition}
+
+\begin{proof}
+Since $\eta(0)=0$, one has
+\[
+P_f^{\mathrm{tree}}(0)=T_f^{(3D)}(0)(X_f)=X_f.
+\]
+By definition of $s_{0.72,1}$, the blend factor vanishes on $[0,0.72]$ and
+equals $1$ at $t=1$. Therefore the displayed endpoint identities follow
+immediately. Continuity follows from continuity of $\eta$, $s_{0.72,1}$,
+$P_f^{\mathrm{tree}}$, and affine interpolation in Euclidean space.
+\end{proof}
+
+\begin{proposition}[Legacy layered is generally not rigid during the settle window]
+Fix $t\in(0.72,1)$ and abbreviate $s=s_{0.72,1}(t)\in(0,1)$. For two vertices
+$a,b$ of the same face, let
+\[
+\Delta_{ab}^{\mathrm{tree}}
+=
+P_{f,a}^{\mathrm{tree}}(t)-P_{f,b}^{\mathrm{tree}}(t),
+\qquad
+\Delta_{ab}^{\mathrm{flat}}
+=
+L_{f,a}-L_{f,b},
+\]
+and let $\ell_{ab}=\norm{x_{f,a}-x_{f,b}}$. Then
+\[
+\norm{P_{f,a}^{\mathrm{legacy}}(t)-P_{f,b}^{\mathrm{legacy}}(t)}^2
+=
+\ell_{ab}^2
++
+2s(1-s)\bigl(
+\Delta_{ab}^{\mathrm{tree}}\cdot\Delta_{ab}^{\mathrm{flat}}
+-\ell_{ab}^2
+\bigr).
+\]
+In particular, unless the endpoint edge vectors coincide for every edge of the
+face, the late legacy blend is not a rigid motion.
+\end{proposition}
+
+\begin{proof}
+Both $P_f^{\mathrm{tree}}(t)$ and $L_f$ are rigid images of $X_f$, hence
+\[
+\norm{\Delta_{ab}^{\mathrm{tree}}}
+=
+\norm{\Delta_{ab}^{\mathrm{flat}}}
+=
+\ell_{ab}.
+\]
+The blended edge vector is
+\[
+(1-s)\Delta_{ab}^{\mathrm{tree}}+s\Delta_{ab}^{\mathrm{flat}},
+\]
+so expanding its squared norm gives
+\begin{align*}
+\norm{(1-s)\Delta_{ab}^{\mathrm{tree}}+s\Delta_{ab}^{\mathrm{flat}}}^2
+&=
+(1-s)^2\ell_{ab}^2+s^2\ell_{ab}^2
++2s(1-s)\Delta_{ab}^{\mathrm{tree}}\cdot\Delta_{ab}^{\mathrm{flat}}\\
+&=
+\ell_{ab}^2
++2s(1-s)\bigl(
+\Delta_{ab}^{\mathrm{tree}}\cdot\Delta_{ab}^{\mathrm{flat}}
+-\ell_{ab}^2
+\bigr).
+\end{align*}
+This equals $\ell_{ab}^2$ for all $s\in(0,1)$ only in the exceptional case that
+every edge vector agrees between the two endpoint placements.
+\end{proof}
+
+\subsection*{Balanced stack}
+
+\paragraph{Intuition.}
+Balanced stack starts from the same tree pose, but it tries to heal visible
+cracks before the final display blend. The program repeatedly averages the
+different copies of each shared vertex and then rigidly refits each whole face
+to those averaged targets. This does not attempt to recover the exact physical
+folded state. Its purpose is more modest and more visual: reduce the worst seam
+openings while preserving a small amount of display thickness in the final
+stack.
+
+For a global vertex $v$, let
+\[
+\mathcal O(v)=
+\set{(f,i):\text{the $i$th local vertex of face $f$ represents }v}.
+\]
+Given a facewise point collection $Q=(Q_f)_f$, define the averaged shared
+vertex location
+\[
+a_v(Q)
+=
+\frac{1}{\abs{\mathcal O(v)}}
+\sum_{(f,i)\in\mathcal O(v)}Q_{f,i}.
+\]
+For $0\le\lambda\le1$, one relaxation sweep forms targets
+\[
+\widetilde Q_{f,i}
+=
+(1-\lambda)Q_{f,i}+\lambda a_{v_{f,i}}(Q)
+\]
+and then refits the whole face by
+\[
+\bigl(\mathcal U_\lambda(Q)\bigr)_f
+=
+\operatorname{RigidFit}(X_f,\widetilde Q_f).
+\]
+The $k$-sweep relaxation operator is
+\[
+\mathcal R_{k,\lambda}
+=
+\mathcal U_\lambda^k.
+\]
+
+\begin{definition}[Balanced stack target and motion]
+Using the same rank order $r(f)$ as legacy layered, the thinner balanced stack
+uses spacing
+\[
+\Delta_{\mathrm{bal}}
+=
+\max\left\{
+\frac{\operatorname{span}(X)}{220m},
+0.006
+\right\},
+\qquad
+h_f^{\mathrm{bal}}
+=
+\Delta_{\mathrm{bal}}
+\left(r(f)-\frac{m-1}{2}\right),
+\]
+and flat target
+\[
+S_f
+=
+\Bigl\{
+\bigl(\Phi_f^{\mathrm{flat}}(\Pi(x_{f,i})),h_f^{\mathrm{bal}}\bigr)
+\Bigr\}_{i=1}^{m_f}.
+\]
+Let
+\[
+C_f
+=
+\bigl(\mathcal R_{6,0.9}(P^{\mathrm{tree}}(1))\bigr)_f,
+\qquad
+B_f
+=
+0.64\,C_f+0.36\,S_f.
+\]
+At runtime the balanced mode uses
+\[
+Q_f^{\mathrm{bal}}(t)
+=
+\bigl(\mathcal R_{k(t),0.88}(P^{\mathrm{tree}}(t))\bigr)_f,
+\qquad
+k(t)=
+\begin{cases}
+4,& t<0.65,\\
+5,& t\ge 0.65,
+\end{cases}
+\]
+followed by the final display blend
 \[
 P_f^{\mathrm{bal}}(t)
 =
-\bigl(1-s_{\mathrm{bal}}(t)\bigr)\mathcal R\bigl(P^{\mathrm{tree}}(t)\bigr)_f
+\bigl(1-s_{0.76,1}(t)\bigr)Q_f^{\mathrm{bal}}(t)
 +
-s_{\mathrm{bal}}(t)B_f,
+s_{0.76,1}(t)B_f.
 \]
-where $B_f$ is a thinner final stack than in legacy layered mode.
+\end{definition}
 
-\paragraph{Seamless rigid.}
-This exact-only mode targets the complete folded figure itself. Let
+\begin{proposition}[Balanced relaxation preserves per-face rigidity]
+For every point collection $Q$, every face of
 \[
-F_f^\star = P_f^{\mathrm{tree}}(1)=P_f(\pi)
+\mathcal R_{k,\lambda}(Q)
 \]
-be the exact final folded face points, and let
+is congruent to the source face $X_f$.
+\end{proposition}
+
+\begin{proof}
+Each sweep $\mathcal U_\lambda$ replaces a face by
 \[
-t_0,\dots,t_{12}\in[0,1]
+\operatorname{RigidFit}(X_f,\widetilde Q_f),
 \]
-be the discrete sample times used by the cache. For each sample time $t_j$, the
-code first builds guide points
+which is congruent to $X_f$ by the rigid-fit lemma. Iterating the same fact
+$k$ times proves the claim.
+\end{proof}
+
+\begin{proposition}[Closed rigid configurations are fixed points of the relaxation]
+Suppose that for each face $f$ there are $(R_f,u_f)\in SO(3)\times\RR^3$ with
 \[
-G_f(t_j)=P_f\!\bigl(\pi\,\eta(t_j)\bigr)
+Q_f=R_fX_f+u_f,
 \]
-and rigidly fits them facewise to obtain guide rotations
+and suppose moreover that whenever two local vertices represent the same global
+vertex, their points in $Q$ coincide exactly. Then for every
+$\lambda\in[0,1]$,
 \[
-\widehat R_{f,j}.
+\mathcal U_\lambda(Q)=Q.
 \]
-It then solves for rigid transforms $(R_{f,j},u_{f,j})$ minimizing a weighted
-sum of three residual families:
+\end{proposition}
+
+\begin{proof}
+If all copies of a global vertex already coincide, then
+\[
+a_v(Q)=Q_{f,i}
+\]
+for every $(f,i)\in\mathcal O(v)$, so the intermediate targets satisfy
+\[
+\widetilde Q_{f,i}=Q_{f,i}.
+\]
+Thus $\mathcal U_\lambda$ rigidly fits $X_f$ to the exact rigid image $Q_f$
+itself. Because every exact face has positive area, at least three noncollinear
+points determine the rigid transform uniquely, so the zero-residual fit returns
+$Q_f$ unchanged.
+\end{proof}
+
+\begin{corollary}[Balanced endpoints]
+For every face $f$,
+\[
+P_f^{\mathrm{bal}}(0)=X_f,
+\qquad
+P_f^{\mathrm{bal}}(1)=B_f.
+\]
+\end{corollary}
+
+\begin{proof}
+At $t=0$ one has $P_f^{\mathrm{tree}}(0)=X_f$, and all shared copies of each
+vertex coincide. The preceding proposition therefore gives
+\[
+Q_f^{\mathrm{bal}}(0)=X_f.
+\]
+Also $s_{0.76,1}(0)=0$ and $s_{0.76,1}(1)=1$, so the displayed endpoint formula
+follows immediately from the final blend definition.
+\end{proof}
+
+\begin{remark}
+As in legacy layered mode, the last affine blend toward $B_f$ is generally not
+itself a rigid motion; the rigid guarantee applies to the relaxation output
+$Q_f^{\mathrm{bal}}(t)$ before the final display blend.
+\end{remark}
+
+\subsection*{Seamless rigid}
+
+\paragraph{Intuition.}
+Seamless rigid is the exact-only mode that tries to remove both visual defects
+at once: it wants connected faces in the middle of the motion, and it wants the
+last frame to be the true folded figure rather than a display stack. The exact
+fold is therefore used only as a guide. At discrete sample times the code
+re-solves a new family of rigid face transforms that stays close to the exact
+guide, keeps neighboring hinge rotations compatible with that guide, and
+explicitly penalizes seam openings. The displayed motion is then built only from
+those accepted rigid samples.
+
+\begin{definition}[Seamless rigid samples]
+Let $r$ be the root face and let
+\[
+t_j=\frac{j}{12},
+\qquad
+j=0,\dots,12.
+\]
+For each sample time $t_j$, define the exact guide points
+\[
+G_f(t_j)=P_f^{\mathrm{exact}}(t_j),
+\]
+and let
+\[
+\operatorname{RigidFit}(X_f,G_f(t_j))
+=
+\widehat R_{f,j}X_f+\widehat u_{f,j}
+\]
+be the facewise guide fit. The root face is fixed at
+\[
+R_{r,j}=I,
+\qquad
+u_{r,j}=0.
+\]
+For each global vertex $v$, let $(f_v,i_v)$ denote the first stored occurrence
+in $\mathcal O(v)$. The three residual families are
 \begin{align}
-\mathcal E_j
+E^{\mathrm{seam}}_j
 &=
-\lambda_{\mathrm{seam}}
-\sum_{\text{shared vertices }x}
-\norm{(R_{f,j}x+u_{f,j})-(R_{g,j}x+u_{g,j})}^2
+\sum_v
+\sum_{(f,i)\in\mathcal O(v)\setminus\set{(f_v,i_v)}}
+\norm{
+(R_{f,j}x_{f,i}+u_{f,j})
+-
+(R_{f_v,j}x_{f_v,i_v}+u_{f_v,j})
+}^2,
 \notag\\
-&\quad
-+
-\lambda_{\mathrm{guide}}
-\sum_f \norm{R_{f,j}X_f+u_{f,j}-G_f(t_j)}_F^2
+E^{\mathrm{guide}}_j
+&=
+\sum_{f\ne r}\sum_i
+\norm{R_{f,j}x_{f,i}+u_{f,j}-G_{f,i}(t_j)}^2,
 \notag\\
-&\quad
-+
-\lambda_{\mathrm{hinge}}
-\sum_{(f,g)\text{ fold-adjacent}}
+E^{\mathrm{hinge}}_j
+&=
+\sum_{(f,g)\in H}
 \norm{
 \log\!\Bigl(
 (R_{g,j}R_{f,j}^{\top})
 (\widehat R_{g,j}\widehat R_{f,j}^{\top})^{\top}
 \Bigr)
-}^2.
+}^2,
+\notag
+\end{align}
+where $H$ is the set of fold-adjacent face pairs. The implemented objective is
+\begin{align}
+\mathcal E_j
+&=
+130\,E^{\mathrm{seam}}_j
++0.34\,E^{\mathrm{guide}}_j
++0.75\,E^{\mathrm{hinge}}_j.
 \label{eq:seamless-rigid}
 \end{align}
-The first term closes seams, the second keeps the sample near the exact fold
-guide, and the third preserves the relative hinge rotation suggested by that
-guide.
+If $p^\star$ denotes the parameter vector of the exact final fit
+$F_f^\star=P_f^{\mathrm{exact}}(1)$ and $\widehat p_j$ the guide-fit parameter
+vector, then the optimizer is started from
+\[
+p_j^{(0)}
+=
+\begin{cases}
+\widehat p_j,& t_j\le0.84,\\[2mm]
+(1-t_j)\widehat p_j+t_jp^\star,& t_j>0.84.
+\end{cases}
+\]
+\end{definition}
 
-A sample is accepted whenever its maximum shared-edge mismatch stays below the
-implemented threshold. Between accepted samples, rotations are interpolated by
-spherical linear interpolation and translations by linear interpolation. If a
-sample fails, the renderer holds the nearest solved exact sample rather than
-dropping back to the older gappy panel relaxation. At $t=1$, the output is
-exactly $F_f^\star$.
+If an accepted sample has incident copies
+\[
+(a_e^+,b_e^+),
+\qquad
+(a_e^-,b_e^-)
+\]
+of a shared edge $e$, define the edge mismatch
+\[
+\operatorname{gap}_e
+=
+\min\Bigl\{
+\max\{\norm{a_e^+-a_e^-},\norm{b_e^+-b_e^-}\},
+\max\{\norm{a_e^+-b_e^-},\norm{b_e^+-a_e^-}\}
+\Bigr\}.
+\]
+The sample is accepted exactly when
+\[
+\operatorname{Gap}_j
+=
+\max_e\operatorname{gap}_e
+\le 0.02.
+\]
 
-If exact face reconstruction itself fails, the project falls back to a
-triangle-mesh preview. In that mode the domain is triangulated and propagated
-along a tree of triangle adjacencies. This is still useful visually, but it is
-intentionally marked as non-certifying.
+Between two solved neighboring samples $t_a<t_b$, the rendered in-between
+rotation of each face is the geodesic / SLERP interpolation
+\[
+R_f(t)
+=
+R_{f,a}
+\exp\!\Bigl(
+\alpha(t)\log\bigl(R_{f,a}^{\top}R_{f,b}\bigr)
+\Bigr),
+\qquad
+\alpha(t)=\frac{t-t_a}{t_b-t_a},
+\]
+with linearly interpolated translation
+\[
+u_f(t)
+=
+(1-\alpha(t))u_{f,a}+\alpha(t)u_{f,b}.
+\]
+If one of the immediate neighboring samples failed, the renderer holds the
+nearest solved exact sample instead of dropping to the older gappy panel
+relaxation.
+
+\begin{proposition}[Accepted seamless-rigid samples are facewise rigid and seam-certified]
+If sample $t_j$ is accepted, then every face of that sample is congruent to
+$X_f$, and its maximum shared-edge mismatch satisfies
+\[
+\operatorname{Gap}_j\le 0.02.
+\]
+\end{proposition}
+
+\begin{proof}
+Accepted samples are stored only in the form
+\[
+R_{f,j}X_f+u_{f,j},
+\]
+so every face is a rigid image of $X_f$. The bound on $\operatorname{Gap}_j$
+is exactly the acceptance criterion used by the implementation.
+\end{proof}
+
+\begin{proposition}[Every interpolated seamless-rigid frame is facewise rigid]
+Suppose $t\in(t_a,t_b)$ lies between two solved neighboring samples. Then for
+every face $f$, the rendered in-between points have the form
+\[
+R_f(t)X_f+u_f(t)
+\]
+with $R_f(t)\in SO(3)$. Hence each face remains congruent to $X_f$ throughout
+the interpolated interval.
+\end{proposition}
+
+\begin{proof}
+The matrix
+\[
+\exp\!\Bigl(
+\alpha(t)\log\bigl(R_{f,a}^{\top}R_{f,b}\bigr)
+\Bigr)
+\]
+lies in $SO(3)$, so $R_f(t)\in SO(3)$. Therefore
+\[
+R_f(t)X_f+u_f(t)
+\]
+is a rigid image of $X_f$, and the rigid-fit lemma gives congruence of all
+facewise distances.
+\end{proof}
+
+\begin{proposition}[Seamless rigid endpoints and exact-model fallback behavior]
+For the exact model,
+\[
+P_f^{\mathrm{rigid}}(0)=X_f,
+\qquad
+P_f^{\mathrm{rigid}}(1)=F_f^\star=P_f^{\mathrm{exact}}(1).
+\]
+Moreover the implementation stores solved anchor samples at $t_0=0$ and
+$t_{12}=1$ from initialization, so every progress value is rendered from either
+a solved exact sample or an interpolation between solved exact samples; it does
+not need to switch back to the older legacy panel relaxation.
+\end{proposition}
+
+\begin{proof}
+The code explicitly stores the initial source configuration as solved sample
+$t_0$ and the exact folded fit as solved sample $t_{12}$. It also returns those
+two states directly at $t=0$ and $t=1$. Since these two anchors always exist,
+every intermediate progress value has at least one solved sample at or before
+it and at least one solved sample at or after it. Hence the exact renderer can
+always return either a solved exact sample or an interpolation between solved
+exact samples.
+\end{proof}
+
+\subsection*{Triangle-mesh fallback}
+
+\paragraph{Intuition.}
+If exact face reconstruction fails, the program does not claim a certified
+rigid-face motion. Instead it triangulates the available regions and propagates
+rigid motions along a triangle tree. This keeps a useful picture on screen, but
+the resulting preview is explicitly warning-level and heuristic.
+
+The mesh fallback triangulates each polygonal region into triangles
+\[
+\Delta.
+\]
+Let $\theta_{\mathrm{mesh}}^{\max}$ denote the mesh preview angle cap, equal to
+$76^\circ$ in the flattening case and $88^\circ$ otherwise. If a tree edge
+between triangles corresponds to a fold edge $e$ with approximate normalized
+dihedral weight $\alpha_e$, then the child transform is
+\[
+S_{\Delta'}(t)
+=
+R_{(p,q)}\!\bigl(\theta_{\mathrm{mesh}}^{\max}\eta(t)\,\alpha_e\bigr)
+S_\Delta(t).
+\]
+If the tree edge is merely a triangulation edge, the child simply inherits the
+parent transform. The legacy and balanced display variants are then applied to
+these triangle poses in exactly the same style as above.
+
+\begin{proposition}[Triangle rigidity in mesh fallback]
+Before the late display blend, every triangle in the mesh fallback remains
+rigid, and every child triangle shares its tree edge exactly with its parent.
+\end{proposition}
+
+\begin{proof}
+Each triangle transform is obtained from its parent either by applying a rigid
+rotation about the common edge or by copying the parent transform unchanged.
+Hence every triangle pose is a rigid image of its source triangle, and the
+common tree edge is preserved exactly by construction.
+\end{proof}
+
+\begin{remark}
+The mesh fallback remains intentionally non-certifying: it does not prove exact
+global face reconstruction, exact cycle closure, or exact overlap order.
+\end{remark}
 
 \section{Status predicates}
 
@@ -796,6 +1569,33 @@ statements separate.
 \]
 \end{definition}
 
+The automation layer also uses two compound predicates.
+
+\begin{definition}[Workflow-level green predicates]
+The local optimization loop uses $\operatorname{LocalGreen}$ above, while the
+full automation predicate is
+\[
+\begin{aligned}
+\operatorname{AllGreen}(\CP)
+\Longleftrightarrow\;&
+\operatorname{Status}_{\mathrm{local}}(\CP)=\Pass
+\wedge
+\operatorname{Status}_{\mathrm{assign}}(\CP)=\Pass
+\\
+&\wedge
+\operatorname{Status}_{\mathrm{global}}(\CP)=\Pass
+\wedge
+\operatorname{Status}_{\mathrm{preview}}(\CP)=\Pass.
+\end{aligned}
+\]
+\end{definition}
+
+\begin{remark}
+Thus the word ``green'' has two different implemented meanings: one local and
+geometric, used during optimization; and one global four-status conjunction,
+used by the full search workflows.
+\end{remark}
+
 \section{Scope and limitations}
 
 The project combines rigorous local constraints with a partly rigorous and
@@ -841,6 +1641,11 @@ Zachary Abel, Jason Cantarella, Erik D. Demaine, David Eppstein, Thomas C.
 Hull, Jason S. Ku, Robert J. Lang, and Tomohiro Tachi.
 \newblock \emph{Rigid Origami Vertices: Conditions and Forcing Sets}.
 \newblock Journal of Computational Geometry, 2017.
+
+\bibitem{tachi_simulation}
+Tomohiro Tachi.
+\newblock \emph{Simulation of Rigid Origami}.
+\newblock In \emph{Origami$^4$}, 2009.
 
 \bibitem{eppstein_flat}
 David Eppstein.
