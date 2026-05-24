@@ -12,10 +12,20 @@ from . import core as cp
 
 BOUNDARY = "boundary"
 FOLD = "fold"
+PREVIEW_MOTION_BALANCED_STACK = "balanced_stack"
+PREVIEW_MOTION_RIGID_PANELS = "rigid_panels"
+DEFAULT_PREVIEW_MOTION_PROFILE = PREVIEW_MOTION_BALANCED_STACK
 
 
 class FoldSimulationError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PreviewMotionProfileSpec:
+    key: str
+    label: str
+    description: str
 
 
 @dataclass(frozen=True)
@@ -61,6 +71,61 @@ class FoldSimulationDiagnostic:
     heuristic_reasons: tuple[str, ...] = ()
 
 
+EXACT_PREVIEW_MOTION_PROFILES = (
+    PreviewMotionProfileSpec(
+        key=PREVIEW_MOTION_BALANCED_STACK,
+        label="Balanced stack",
+        description="Closes seams during motion and keeps a modest display thickness at the finish.",
+    ),
+    PreviewMotionProfileSpec(
+        key=PREVIEW_MOTION_RIGID_PANELS,
+        label="Rigid panels",
+        description="Keeps polygon faces rigid through the motion and avoids the flattened display stack.",
+    ),
+)
+MESH_PREVIEW_MOTION_PROFILES = (EXACT_PREVIEW_MOTION_PROFILES[0],)
+PREVIEW_MOTION_PROFILE_BY_KEY = {
+    spec.key: spec
+    for spec in EXACT_PREVIEW_MOTION_PROFILES
+}
+
+
+def preview_motion_profiles(
+    *,
+    is_mesh_approximation: bool,
+) -> tuple[PreviewMotionProfileSpec, ...]:
+    return (
+        MESH_PREVIEW_MOTION_PROFILES
+        if is_mesh_approximation
+        else EXACT_PREVIEW_MOTION_PROFILES
+    )
+
+
+def resolve_motion_profile(
+    requested: str | None,
+    supported: tuple[str, ...],
+) -> str:
+    if requested in supported:
+        return requested
+    if DEFAULT_PREVIEW_MOTION_PROFILE in supported:
+        return DEFAULT_PREVIEW_MOTION_PROFILE
+    if supported:
+        return supported[0]
+    return DEFAULT_PREVIEW_MOTION_PROFILE
+
+
+def motion_profile_label(key: str) -> str:
+    spec = PREVIEW_MOTION_PROFILE_BY_KEY.get(key)
+    if spec is not None:
+        return spec.label
+    return key.replace("_", " ").title()
+
+
+def motion_profile_description(key: str) -> str:
+    spec = PREVIEW_MOTION_PROFILE_BY_KEY.get(key)
+    return "" if spec is None else spec.description
+
+
 class FoldedFigureModel:
     def __init__(
         self,
@@ -97,8 +162,28 @@ class FoldedFigureModel:
             for edge_key, edge in edge_lookup.items()
             if edge.boundary_group is not None
         }
+        self.max_angle = math.pi - 0.1
+        self.supported_motion_profiles = tuple(
+            spec.key for spec in preview_motion_profiles(is_mesh_approximation=False)
+        )
+        self.source_face_points = _build_source_face_points(coords, faces)
+        self.vertex_occurrences = _build_vertex_occurrences(faces, len(coords))
+        self.top_surface_flags = tuple(
+            bool(np.linalg.det(transform[:2, :2]) > 0)
+            for transform in flat_transforms
+        )
         self.layer_offsets = self._build_layer_offsets()
         self.final_face_points = self._build_final_face_points()
+        self._closed_face_points = self._relaxed_face_points(
+            self.face_points_at_angle(self.max_angle),
+            iterations=6,
+            strength=0.9,
+        )
+        self._balanced_final_face_points = _blend_face_points(
+            self._closed_face_points,
+            self.final_face_points,
+            0.36,
+        )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
         self.is_mesh_approximation = False
 
@@ -112,7 +197,7 @@ class FoldedFigureModel:
 
         scores.sort()
         span = float(np.ptp(self.coords[:, 0]) + np.ptp(self.coords[:, 1]))
-        thickness = max(span / max(len(self.faces) * 18.0, 1.0), 0.02)
+        thickness = max(span / max(len(self.faces) * 220.0, 1.0), 0.006)
         offsets = [0.0] * len(self.faces)
         for rank, (_, _, _, index) in enumerate(scores):
             offsets[index] = rank * thickness
@@ -133,6 +218,22 @@ class FoldedFigureModel:
                 )
             points_by_face.append(np.array(face_points, dtype=float))
         return tuple(points_by_face)
+
+    def _relaxed_face_points(
+        self,
+        points_by_face: tuple[np.ndarray, ...],
+        *,
+        iterations: int,
+        strength: float,
+    ) -> tuple[np.ndarray, ...]:
+        return _relax_face_points(
+            points_by_face,
+            self.faces,
+            self.source_face_points,
+            self.vertex_occurrences,
+            iterations=iterations,
+            strength=strength,
+        )
 
     def _build_final_face_points(self) -> tuple[np.ndarray, ...]:
         states: list[np.ndarray] = []
@@ -175,33 +276,55 @@ class FoldedFigureModel:
 
         return tuple(transform for transform in transforms if transform is not None)
 
-    def frame(self, progress: float) -> tuple[FaceRenderState, ...]:
+    def _render_states(
+        self,
+        points_by_face: tuple[np.ndarray, ...],
+    ) -> tuple[FaceRenderState, ...]:
+        states: list[FaceRenderState] = []
+        for index, face in enumerate(self.faces):
+            states.append(
+                FaceRenderState(
+                    index=index,
+                    points=points_by_face[index],
+                    triangles=face.triangles,
+                    top_surface=self.top_surface_flags[index],
+                )
+            )
+        return tuple(states)
+
+    def frame(
+        self,
+        progress: float,
+        motion_profile: str = DEFAULT_PREVIEW_MOTION_PROFILE,
+    ) -> tuple[FaceRenderState, ...]:
         progress = min(max(progress, 0.0), 1.0)
         if not self.faces:
             return tuple()
 
+        motion_profile = resolve_motion_profile(
+            motion_profile,
+            self.supported_motion_profiles,
+        )
         eased = _ease_in_out(progress)
-        posed_transforms = self._pose_tree((math.pi - 0.1) * eased)
-        settle = _smoothstep(0.72, 1.0, progress)
+        posed_points = self.face_points_at_angle(self.max_angle * eased)
 
-        states: list[FaceRenderState] = []
-        for index, face in enumerate(self.faces):
-            pose_points = []
-            for vertex_index in face.vertices:
-                pose_points.append(_apply_transform_3d(posed_transforms[index], self.coords[vertex_index]))
-            pose_points_array = np.array(pose_points, dtype=float)
-            final_points = self.final_face_points[index]
-            points = (1.0 - settle) * pose_points_array + settle * final_points
-            top_surface = bool(np.linalg.det(self.flat_transforms[index][:2, :2]) > 0)
-            states.append(
-                FaceRenderState(
-                    index=index,
-                    points=points,
-                    triangles=face.triangles,
-                    top_surface=top_surface,
-                )
+        if motion_profile == PREVIEW_MOTION_RIGID_PANELS:
+            relaxed = self._relaxed_face_points(
+                posed_points,
+                iterations=4 if progress < 0.85 else 6,
+                strength=0.94,
             )
-        return tuple(states)
+            return self._render_states(relaxed)
+
+        relaxed = self._relaxed_face_points(
+            posed_points,
+            iterations=4 if progress < 0.65 else 5,
+            strength=0.88,
+        )
+        settle = _smoothstep(0.76, 1.0, progress)
+        return self._render_states(
+            _blend_face_points(relaxed, self._balanced_final_face_points, settle)
+        )
 
 
 class ApproximateFoldedFigureModel:
@@ -237,11 +360,34 @@ class ApproximateFoldedFigureModel:
         self.final_angle_scale = final_angle_scale
         self.face_count = len(faces)
         self.face_edge_keys = _build_face_edge_keys(faces)
+        self.supported_motion_profiles = tuple(
+            spec.key for spec in preview_motion_profiles(is_mesh_approximation=True)
+        )
+        self.source_face_points = _build_source_face_points(coords, faces)
+        self.vertex_occurrences = _build_vertex_occurrences(faces, len(coords))
+        self.top_surface_flags = tuple(
+            bool(np.linalg.det(transform[:2, :2]) > 0)
+            for transform in flat_transforms
+        )
         self.edge_render_kind: dict[tuple[int, int], str] = {}
         self.edge_boundary_groups: dict[tuple[int, int], int] = {}
         self.max_angle = math.radians(76 if settle_to_flat else 88)
         self.layer_offsets = self._build_layer_offsets()
         self.final_face_points = self._build_final_face_points()
+        closed_angle_scale = self.max_angle * (
+            self.final_angle_scale if not self.settle_to_flat else 1.0
+        )
+        self._closed_face_points = self._relaxed_face_points(
+            self._pose_points(closed_angle_scale),
+            iterations=4,
+            strength=0.88,
+        )
+        balanced_blend = 0.44 if self.settle_to_flat else 0.18
+        self._balanced_final_face_points = _blend_face_points(
+            self._closed_face_points,
+            self.final_face_points,
+            balanced_blend,
+        )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
 
     def _build_layer_offsets(self) -> tuple[float, ...]:
@@ -253,7 +399,7 @@ class ApproximateFoldedFigureModel:
             increment = 1 if edge_key is not None and self.edge_is_fold.get(edge_key, False) else 0
             depth_map[face_index] = depth_map.get(parent, 0) + increment
         span = float(max(np.ptp(self.coords[:, 0]), np.ptp(self.coords[:, 1]), 1.0))
-        thickness = max(span / max(len(self.faces) * 30.0, 1.0), 0.02)
+        thickness = max(span / max(len(self.faces) * 280.0, 1.0), 0.004)
         for index in range(len(self.faces)):
             offsets[index] = depth_map.get(index, 0) * thickness
         if offsets:
@@ -315,35 +461,77 @@ class ApproximateFoldedFigureModel:
             states.append(np.array(flat_points, dtype=float))
         return tuple(states)
 
-    def frame(self, progress: float) -> tuple[FaceRenderState, ...]:
-        progress = min(max(progress, 0.0), 1.0)
-        if not self.faces:
-            return tuple()
-
-        eased = _ease_in_out(progress)
-        transforms = self._pose_tree(self.max_angle * eased)
-        settle = _smoothstep(0.70, 1.0, progress)
-        if not self.settle_to_flat:
-            settle = _smoothstep(0.82, 1.0, progress)
-
-        states: list[FaceRenderState] = []
+    def _pose_points(self, angle_scale: float) -> tuple[np.ndarray, ...]:
+        transforms = self._pose_tree(angle_scale)
+        points_by_face: list[np.ndarray] = []
         for index, face in enumerate(self.faces):
             pose_points = []
             for vertex_index in face.vertices:
                 point = _apply_transform_3d(transforms[index], self.coords[vertex_index]).copy()
                 pose_points.append(point)
-            pose_points_array = np.array(pose_points, dtype=float)
-            final_points = self.final_face_points[index]
-            points = (1.0 - settle) * pose_points_array + settle * final_points
+            points_by_face.append(np.array(pose_points, dtype=float))
+        return tuple(points_by_face)
+
+    def _relaxed_face_points(
+        self,
+        points_by_face: tuple[np.ndarray, ...],
+        *,
+        iterations: int,
+        strength: float,
+    ) -> tuple[np.ndarray, ...]:
+        return _relax_face_points(
+            points_by_face,
+            self.faces,
+            self.source_face_points,
+            self.vertex_occurrences,
+            iterations=iterations,
+            strength=strength,
+        )
+
+    def _render_states(
+        self,
+        points_by_face: tuple[np.ndarray, ...],
+    ) -> tuple[FaceRenderState, ...]:
+        states: list[FaceRenderState] = []
+        for index, face in enumerate(self.faces):
             states.append(
                 FaceRenderState(
                     index=index,
-                    points=points,
+                    points=points_by_face[index],
                     triangles=face.triangles,
-                    top_surface=bool(np.linalg.det(self.flat_transforms[index][:2, :2]) > 0),
+                    top_surface=self.top_surface_flags[index],
                 )
             )
         return tuple(states)
+
+    def frame(
+        self,
+        progress: float,
+        motion_profile: str = DEFAULT_PREVIEW_MOTION_PROFILE,
+    ) -> tuple[FaceRenderState, ...]:
+        progress = min(max(progress, 0.0), 1.0)
+        if not self.faces:
+            return tuple()
+
+        motion_profile = resolve_motion_profile(
+            motion_profile,
+            self.supported_motion_profiles,
+        )
+        eased = _ease_in_out(progress)
+        posed_points = self._pose_points(self.max_angle * eased)
+        relaxed = self._relaxed_face_points(
+            posed_points,
+            iterations=3 if progress < 0.65 else 4,
+            strength=0.82,
+        )
+        settle = _smoothstep(0.72, 1.0, progress)
+        if not self.settle_to_flat:
+            settle = _smoothstep(0.84, 1.0, progress)
+        if motion_profile != PREVIEW_MOTION_BALANCED_STACK:
+            motion_profile = PREVIEW_MOTION_BALANCED_STACK
+        return self._render_states(
+            _blend_face_points(relaxed, self._balanced_final_face_points, settle)
+        )
 
 
 def build_folded_figure(pattern: cp.CreasePattern) -> FoldedFigureModel:
@@ -938,6 +1126,98 @@ def _build_face_edge_keys(faces: tuple[SimulationFace, ...]) -> tuple[tuple[tupl
         keys = tuple(tuple(sorted((a, b))) for a, b in zip(face.vertices, face.vertices[1:] + face.vertices[:1]))
         edge_keys.append(keys)
     return tuple(edge_keys)
+
+
+def _build_source_face_points(
+    coords: np.ndarray,
+    faces: tuple[SimulationFace, ...],
+) -> tuple[np.ndarray, ...]:
+    return tuple(
+        np.array(
+            [[coords[vertex][0], coords[vertex][1], 0.0] for vertex in face.vertices],
+            dtype=float,
+        )
+        for face in faces
+    )
+
+
+def _build_vertex_occurrences(
+    faces: tuple[SimulationFace, ...],
+    vertex_count: int,
+) -> tuple[tuple[tuple[int, int], ...], ...]:
+    occurrences: list[list[tuple[int, int]]] = [[] for _ in range(vertex_count)]
+    for face_index, face in enumerate(faces):
+        for local_index, vertex_index in enumerate(face.vertices):
+            occurrences[vertex_index].append((face_index, local_index))
+    return tuple(tuple(group) for group in occurrences)
+
+
+def _blend_face_points(
+    left: tuple[np.ndarray, ...],
+    right: tuple[np.ndarray, ...],
+    weight: float,
+) -> tuple[np.ndarray, ...]:
+    weight = min(max(weight, 0.0), 1.0)
+    return tuple(
+        (1.0 - weight) * first + weight * second
+        for first, second in zip(left, right)
+    )
+
+
+def _relax_face_points(
+    points_by_face: tuple[np.ndarray, ...],
+    faces: tuple[SimulationFace, ...],
+    source_face_points: tuple[np.ndarray, ...],
+    vertex_occurrences: tuple[tuple[tuple[int, int], ...], ...],
+    *,
+    iterations: int,
+    strength: float,
+) -> tuple[np.ndarray, ...]:
+    if iterations <= 0 or not points_by_face:
+        return tuple(np.array(points, dtype=float, copy=True) for points in points_by_face)
+
+    current = tuple(np.array(points, dtype=float, copy=True) for points in points_by_face)
+    strength = min(max(strength, 0.0), 1.0)
+    for _ in range(iterations):
+        averaged_vertices: list[np.ndarray | None] = [None] * len(vertex_occurrences)
+        for vertex_index, occurrences in enumerate(vertex_occurrences):
+            if not occurrences:
+                continue
+            averaged_vertices[vertex_index] = np.mean(
+                [current[face_index][local_index] for face_index, local_index in occurrences],
+                axis=0,
+            )
+
+        updated: list[np.ndarray] = []
+        for face_index, face in enumerate(faces):
+            targets = np.array(current[face_index], dtype=float, copy=True)
+            for local_index, vertex_index in enumerate(face.vertices):
+                average = averaged_vertices[vertex_index]
+                if average is None:
+                    continue
+                targets[local_index] = (
+                    (1.0 - strength) * current[face_index][local_index] + strength * average
+                )
+            updated.append(_fit_rigid_face(source_face_points[face_index], targets))
+        current = tuple(updated)
+    return current
+
+
+def _fit_rigid_face(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    if len(source) != len(target):
+        raise FoldSimulationError("Rigid face fitting received mismatched point counts.")
+
+    source_centroid = source.mean(axis=0)
+    target_centroid = target.mean(axis=0)
+    centered_source = source - source_centroid
+    centered_target = target - target_centroid
+    covariance = centered_source.T @ centered_target
+    left, _, right_t = np.linalg.svd(covariance)
+    rotation = right_t.T @ left.T
+    if np.linalg.det(rotation) < 0:
+        right_t[-1, :] *= -1
+        rotation = right_t.T @ left.T
+    return centered_source @ rotation + target_centroid
 
 
 def _signed_area(coords: np.ndarray, face: tuple[int, ...] | list[int]) -> float:
