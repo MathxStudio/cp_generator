@@ -18,7 +18,12 @@ PREVIEW_MOTION_LEGACY_LAYERED = "legacy_layered"
 PREVIEW_MOTION_BALANCED_STACK = "balanced_stack"
 PREVIEW_MOTION_RIGID_PANELS = "rigid_panels"
 DEFAULT_PREVIEW_MOTION_PROFILE = PREVIEW_MOTION_LEGACY_LAYERED
-SEAMLESS_RIGID_SAMPLE_COUNT = 41
+SEAMLESS_RIGID_SAMPLE_COUNT = 13
+SEAMLESS_RIGID_SEAM_WEIGHT = 130.0
+SEAMLESS_RIGID_GUIDE_WEIGHT = 0.34
+SEAMLESS_RIGID_HINGE_WEIGHT = 0.75
+SEAMLESS_RIGID_MAX_NFEV = 80
+SEAMLESS_RIGID_MAX_EDGE_GAP = 0.02
 
 
 class FoldSimulationError(RuntimeError):
@@ -168,6 +173,10 @@ class FoldedFigureModel:
         self.cycle_drift = cycle_drift
         self.face_count = len(faces)
         self.face_edge_keys = _build_face_edge_keys(faces)
+        self.fold_edge_face_pairs = _build_fold_edge_face_pairs(
+            self.face_edge_keys,
+            edge_lookup,
+        )
         self.edge_render_kind = {edge_key: edge.kind for edge_key, edge in edge_lookup.items()}
         self.edge_boundary_groups = {
             edge_key: edge.boundary_group
@@ -209,14 +218,54 @@ class FoldedFigureModel:
         )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
         self.is_mesh_approximation = False
+        self._seamless_rigid_root_face = self.tree_order[0] if self.tree_order else 0
+        self._seamless_rigid_non_root_faces = tuple(
+            face_index
+            for face_index in range(self.face_count)
+            if face_index != self._seamless_rigid_root_face
+        )
         self._seamless_rigid_progress_samples = np.linspace(
             0.0,
             1.0,
             SEAMLESS_RIGID_SAMPLE_COUNT,
             dtype=float,
         )
-        self._seamless_rigid_rotvec_samples: np.ndarray | None = None
-        self._seamless_rigid_translation_samples: np.ndarray | None = None
+        (
+            self._seamless_rigid_final_rotations,
+            self._seamless_rigid_final_translations,
+        ) = _fit_face_transforms(
+            self.source_face_points,
+            self._exact_folded_face_points,
+        )
+        self._seamless_rigid_final_parameters = _pack_face_transform_parameters(
+            self._seamless_rigid_final_rotations,
+            self._seamless_rigid_final_translations,
+            self._seamless_rigid_non_root_faces,
+        )
+        sample_count = len(self._seamless_rigid_progress_samples)
+        self._seamless_rigid_rotvec_samples = np.zeros(
+            (sample_count, self.face_count, 3),
+            dtype=float,
+        )
+        self._seamless_rigid_translation_samples = np.zeros(
+            (sample_count, self.face_count, 3),
+            dtype=float,
+        )
+        self._seamless_rigid_sample_solved = np.zeros(sample_count, dtype=bool)
+        self._seamless_rigid_sample_failed = np.zeros(sample_count, dtype=bool)
+        self._seamless_rigid_sample_solved[0] = True
+        self._seamless_rigid_rotvec_samples[-1] = np.array(
+            [
+                Rotation.from_matrix(rotation).as_rotvec()
+                for rotation in self._seamless_rigid_final_rotations
+            ],
+            dtype=float,
+        )
+        self._seamless_rigid_translation_samples[-1] = np.array(
+            self._seamless_rigid_final_translations,
+            dtype=float,
+        )
+        self._seamless_rigid_sample_solved[-1] = True
         self._seamless_rigid_available = True
 
     def _build_layer_offsets(
@@ -346,114 +395,110 @@ class FoldedFigureModel:
             strength=0.94,
         )
 
-    def _ensure_seamless_rigid_motion(self) -> None:
-        if self._seamless_rigid_rotvec_samples is not None:
+    def _ensure_seamless_rigid_motion(self, target_index: int) -> None:
+        if (
+            self._seamless_rigid_sample_solved[target_index]
+            or self._seamless_rigid_sample_failed[target_index]
+        ):
             return
         if not self._seamless_rigid_available:
             return
 
         try:
-            sample_count = len(self._seamless_rigid_progress_samples)
-            rotvec_samples = np.zeros((sample_count, self.face_count, 3), dtype=float)
-            translation_samples = np.zeros((sample_count, self.face_count, 3), dtype=float)
             if self.face_count <= 1:
-                self._seamless_rigid_rotvec_samples = rotvec_samples
-                self._seamless_rigid_translation_samples = translation_samples
+                self._seamless_rigid_sample_solved[target_index] = True
                 return
 
-            root_face = self.tree_order[0]
-            non_root_faces = tuple(
-                face_index for face_index in range(self.face_count) if face_index != root_face
-            )
-            if not non_root_faces:
-                self._seamless_rigid_rotvec_samples = rotvec_samples
-                self._seamless_rigid_translation_samples = translation_samples
+            if not self._seamless_rigid_non_root_faces:
+                self._seamless_rigid_sample_solved[target_index] = True
                 return
 
-            final_rotations, final_translations = _fit_face_transforms(
+            raw_progress = float(self._seamless_rigid_progress_samples[target_index])
+            guide_points = self.face_points_at_angle(math.pi * _ease_in_out(float(raw_progress)))
+            guide_rotations, guide_translations = _fit_face_transforms(
                 self.source_face_points,
-                self._exact_folded_face_points,
+                guide_points,
             )
-            final_parameters = _pack_face_transform_parameters(
-                final_rotations,
-                final_translations,
-                non_root_faces,
+            parameters = _pack_face_transform_parameters(
+                guide_rotations,
+                guide_translations,
+                self._seamless_rigid_non_root_faces,
             )
-            parameters = np.zeros_like(final_parameters)
-
-            for sample_index, raw_progress in enumerate(self._seamless_rigid_progress_samples):
-                if sample_index == 0:
-                    rotations, translations = _unpack_face_transform_parameters(
-                        parameters,
-                        self.face_count,
-                        root_face,
-                        non_root_faces,
-                    )
-                elif sample_index == sample_count - 1:
-                    rotations = final_rotations
-                    translations = final_translations
-                else:
-                    if raw_progress > 0.84:
-                        parameters = (1.0 - raw_progress) * parameters + raw_progress * final_parameters
-                    guide_points = self.face_points_at_angle(math.pi * _ease_in_out(float(raw_progress)))
-                    result = least_squares(
-                        _rigid_projection_residuals,
-                        parameters,
-                        args=(
-                            guide_points,
-                            self.source_face_points,
-                            self.vertex_occurrences,
-                            root_face,
-                            non_root_faces,
-                            130.0,
-                            0.34,
-                        ),
-                        max_nfev=400,
-                        xtol=1e-10,
-                        ftol=1e-10,
-                        gtol=1e-10,
-                    )
-                    parameters = result.x
-                    rotations, translations = _unpack_face_transform_parameters(
-                        parameters,
-                        self.face_count,
-                        root_face,
-                        non_root_faces,
-                    )
-                    projected_points = _apply_face_transforms(
-                        self.source_face_points,
-                        rotations,
-                        translations,
-                    )
-                    if (
-                        not result.success
-                        or _max_shared_edge_gap(self.face_edge_keys, projected_points) > 0.02
-                    ):
-                        self._seamless_rigid_available = False
-                        return
-
-                rotvec_samples[sample_index] = np.array(
-                    [Rotation.from_matrix(rotation).as_rotvec() for rotation in rotations],
-                    dtype=float,
+            if raw_progress > 0.84:
+                parameters = (
+                    (1.0 - raw_progress) * parameters
+                    + raw_progress * self._seamless_rigid_final_parameters
                 )
-                translation_samples[sample_index] = np.array(translations, dtype=float)
 
-            self._seamless_rigid_rotvec_samples = rotvec_samples
-            self._seamless_rigid_translation_samples = translation_samples
+            result = least_squares(
+                _rigid_projection_residuals,
+                parameters,
+                args=(
+                    guide_points,
+                    self.source_face_points,
+                    self.vertex_occurrences,
+                    guide_rotations,
+                    self.fold_edge_face_pairs,
+                    self._seamless_rigid_root_face,
+                    self._seamless_rigid_non_root_faces,
+                    SEAMLESS_RIGID_SEAM_WEIGHT,
+                    SEAMLESS_RIGID_GUIDE_WEIGHT,
+                    SEAMLESS_RIGID_HINGE_WEIGHT,
+                ),
+                max_nfev=SEAMLESS_RIGID_MAX_NFEV,
+                xtol=1e-10,
+                ftol=1e-10,
+                gtol=1e-10,
+            )
+            rotations, translations = _unpack_face_transform_parameters(
+                result.x,
+                self.face_count,
+                self._seamless_rigid_root_face,
+                self._seamless_rigid_non_root_faces,
+            )
+            projected_points = _apply_face_transforms(
+                self.source_face_points,
+                rotations,
+                translations,
+            )
+            shared_edge_gap = _max_shared_edge_gap(self.face_edge_keys, projected_points)
+            if not np.isfinite(shared_edge_gap) or shared_edge_gap > SEAMLESS_RIGID_MAX_EDGE_GAP:
+                self._seamless_rigid_sample_failed[target_index] = True
+                return
+
+            self._seamless_rigid_rotvec_samples[target_index] = np.array(
+                [Rotation.from_matrix(rotation).as_rotvec() for rotation in rotations],
+                dtype=float,
+            )
+            self._seamless_rigid_translation_samples[target_index] = np.array(
+                translations,
+                dtype=float,
+            )
+            self._seamless_rigid_sample_solved[target_index] = True
         except Exception:
-            self._seamless_rigid_available = False
+            self._seamless_rigid_sample_failed[target_index] = True
+
+    def _nearest_solved_seamless_sample_at_or_before(self, index: int) -> int | None:
+        candidate = min(index, len(self._seamless_rigid_progress_samples) - 1)
+        while candidate >= 0:
+            if self._seamless_rigid_sample_solved[candidate]:
+                return candidate
+            candidate -= 1
+        return None
+
+    def _nearest_solved_seamless_sample_at_or_after(self, index: int) -> int | None:
+        candidate = max(index, 0)
+        limit = len(self._seamless_rigid_progress_samples)
+        while candidate < limit:
+            if self._seamless_rigid_sample_solved[candidate]:
+                return candidate
+            candidate += 1
+        return None
 
     def _seamless_rigid_face_points(
         self,
         progress: float,
     ) -> tuple[np.ndarray, ...] | None:
-        self._ensure_seamless_rigid_motion()
-        if (
-            self._seamless_rigid_rotvec_samples is None
-            or self._seamless_rigid_translation_samples is None
-        ):
-            return None
-
         progress = min(max(progress, 0.0), 1.0)
         if progress <= 0.0:
             return tuple(np.array(points, dtype=float, copy=True) for points in self.source_face_points)
@@ -467,22 +512,60 @@ class FoldedFigureModel:
         lower_index = max(0, upper_index - 1)
         upper_index = min(upper_index, len(self._seamless_rigid_progress_samples) - 1)
 
-        left_progress = float(self._seamless_rigid_progress_samples[lower_index])
-        right_progress = float(self._seamless_rigid_progress_samples[upper_index])
-        if upper_index == lower_index or right_progress - left_progress <= 1e-12:
+        self._ensure_seamless_rigid_motion(lower_index)
+        self._ensure_seamless_rigid_motion(upper_index)
+        left_index = self._nearest_solved_seamless_sample_at_or_before(lower_index)
+        right_index = self._nearest_solved_seamless_sample_at_or_after(upper_index)
+        if left_index is None and right_index is None:
+            return None
+        if right_index is None:
+            left_index = left_index if left_index is not None else 0
             return _apply_face_transform_samples(
                 self.source_face_points,
-                self._seamless_rigid_rotvec_samples[lower_index],
-                self._seamless_rigid_translation_samples[lower_index],
+                self._seamless_rigid_rotvec_samples[left_index],
+                self._seamless_rigid_translation_samples[left_index],
+            )
+        if left_index is None:
+            return _apply_face_transform_samples(
+                self.source_face_points,
+                self._seamless_rigid_rotvec_samples[right_index],
+                self._seamless_rigid_translation_samples[right_index],
+            )
+
+        left_progress = float(self._seamless_rigid_progress_samples[left_index])
+        right_progress = float(self._seamless_rigid_progress_samples[right_index])
+        if abs(progress - left_progress) <= 1e-12 or right_index == left_index:
+            return _apply_face_transform_samples(
+                self.source_face_points,
+                self._seamless_rigid_rotvec_samples[left_index],
+                self._seamless_rigid_translation_samples[left_index],
+            )
+        if abs(progress - right_progress) <= 1e-12 or right_progress - left_progress <= 1e-12:
+            return _apply_face_transform_samples(
+                self.source_face_points,
+                self._seamless_rigid_rotvec_samples[right_index],
+                self._seamless_rigid_translation_samples[right_index],
+            )
+        if left_index != lower_index or right_index != upper_index:
+            if progress - left_progress <= right_progress - progress:
+                return _apply_face_transform_samples(
+                    self.source_face_points,
+                    self._seamless_rigid_rotvec_samples[left_index],
+                    self._seamless_rigid_translation_samples[left_index],
+                )
+            return _apply_face_transform_samples(
+                self.source_face_points,
+                self._seamless_rigid_rotvec_samples[right_index],
+                self._seamless_rigid_translation_samples[right_index],
             )
 
         weight = (progress - left_progress) / (right_progress - left_progress)
         return _interpolate_face_transform_samples(
             self.source_face_points,
-            self._seamless_rigid_rotvec_samples[lower_index],
-            self._seamless_rigid_translation_samples[lower_index],
-            self._seamless_rigid_rotvec_samples[upper_index],
-            self._seamless_rigid_translation_samples[upper_index],
+            self._seamless_rigid_rotvec_samples[left_index],
+            self._seamless_rigid_translation_samples[left_index],
+            self._seamless_rigid_rotvec_samples[right_index],
+            self._seamless_rigid_translation_samples[right_index],
             weight,
         )
 
@@ -1356,6 +1439,25 @@ def _build_face_edge_keys(faces: tuple[SimulationFace, ...]) -> tuple[tuple[tupl
     return tuple(edge_keys)
 
 
+def _build_fold_edge_face_pairs(
+    face_edge_keys: tuple[tuple[tuple[int, int], ...], ...],
+    edge_lookup: dict[tuple[int, int], SimulationEdge],
+) -> tuple[tuple[int, int], ...]:
+    incident_faces: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for face_index, edge_keys in enumerate(face_edge_keys):
+        for edge_key in edge_keys:
+            incident_faces[edge_key].append(face_index)
+
+    pairs: list[tuple[int, int]] = []
+    for edge_key, edge in edge_lookup.items():
+        if edge.kind != FOLD:
+            continue
+        faces = incident_faces.get(edge_key, [])
+        if len(faces) == 2:
+            pairs.append((faces[0], faces[1]))
+    return tuple(pairs)
+
+
 def _build_source_face_points(
     coords: np.ndarray,
     faces: tuple[SimulationFace, ...],
@@ -1609,10 +1711,13 @@ def _rigid_projection_residuals(
     guide_points: tuple[np.ndarray, ...],
     source_face_points: tuple[np.ndarray, ...],
     vertex_occurrences: tuple[tuple[tuple[int, int], ...], ...],
+    guide_rotations: tuple[np.ndarray, ...],
+    fold_edge_face_pairs: tuple[tuple[int, int], ...],
     root_face: int,
     non_root_faces: tuple[int, ...],
     seam_weight: float,
     guide_weight: float,
+    hinge_weight: float,
 ) -> np.ndarray:
     rotations, translations = _unpack_face_transform_parameters(
         parameters,
@@ -1646,6 +1751,20 @@ def _rigid_projection_residuals(
                 guide_weight
                 * (posed_points[face_index] - guide_points[face_index])
             ).ravel().tolist()
+        )
+
+    for first_face, second_face in fold_edge_face_pairs:
+        relative_rotation = rotations[second_face] @ rotations[first_face].T
+        guide_relative_rotation = (
+            guide_rotations[second_face] @ guide_rotations[first_face].T
+        )
+        residuals.extend(
+            (
+                hinge_weight
+                * Rotation.from_matrix(
+                    relative_rotation @ guide_relative_rotation.T
+                ).as_rotvec()
+            ).tolist()
         )
 
     return np.array(residuals, dtype=float)

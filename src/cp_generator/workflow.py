@@ -302,6 +302,7 @@ def build_preview(
     preview_reference_pattern: cp.CreasePattern | None = None,
     allow_reference_fallback: bool = False,
     spatial_mode: bool = True,
+    include_payload: bool = True,
 ) -> PreviewBuildResult:
     assignment = pattern.analyze_assignments()
     if not pattern.vertices or not pattern.folds or assignment.assigned_fold_count == 0:
@@ -381,7 +382,11 @@ def build_preview(
         return PreviewBuildResult(
             model=model,
             diagnostic=diagnostic,
-            payload=_preview_payload(model, diagnostic),
+            payload=(
+                _preview_payload(model, diagnostic)
+                if include_payload
+                else None
+            ),
             solver=solver_name,
             source=source_name,
             preview_reference_pattern=reference_result,
