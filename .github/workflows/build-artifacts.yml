@@ -158,9 +158,9 @@ jobs:
             archive_path: cp-generator-windows-portable.zip
           - label: macos
             os: macos-latest
-            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
-            smoke_cmd: ./dist/CPGenerator --smoke-test
-            archive_cmd: ditto -c -k --sequesterRsrc dist/CPGenerator cp-generator-macos-portable.zip
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --runtime-hook scripts/pyinstaller_rth_library_path.py --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy --add-binary "$(brew --prefix cairo)/lib/libcairo.2.dylib:." scripts/desktop_launcher.py
+            smoke_cmd: ./dist/CPGenerator.app/Contents/MacOS/CPGenerator --smoke-test
+            archive_cmd: ditto -c -k --sequesterRsrc dist/CPGenerator.app cp-generator-macos-portable.zip
             archive_path: cp-generator-macos-portable.zip
 
     steps:
