@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-24
+
+### Fixed
+- Kept `Seamless rigid` preview motion continuous by holding the nearest solved seam-closed sample when an exact intermediate solve fails, instead of snapping to the gappy fallback path.
+- Stopped desktop preview rebuild and report generation from eagerly serializing preview payloads, which restores responsive optimize/save steps for large sessions.
+- Added a regression fixture for the `cp-v11-00` session so the once-stalled lower-right creases keep folding during rigid preview playback.
+
+### Documentation
+- Expanded the report and Beamer slides to explain the Maekawa-preserving obtuse-angle repair and the mathematics behind the three 3D preview motion families.
+
 ## [0.3.4] - 2026-05-24
 
 ### Fixed
