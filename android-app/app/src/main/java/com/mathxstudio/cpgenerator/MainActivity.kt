@@ -587,6 +587,7 @@ private fun FoldPreviewStage(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PreviewControls(
     preview: PreviewModel?,
