@@ -1395,7 +1395,7 @@ class CPGeneratorApp:
 
         preview_hint = ttk.Label(
             preview_card,
-            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Legacy layered restores the original dissected fold preview, balanced stack is the newer seam-closing option, and rigid panels is exact-only.",
+            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Legacy layered restores the original dissected fold preview, balanced stack is the seam-closing display option, and seamless rigid is exact-only and targets the complete folded figure.",
             style="CardMuted.TLabel",
             justify="left",
         )
