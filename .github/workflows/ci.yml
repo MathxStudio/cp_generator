@@ -75,18 +75,39 @@ jobs:
           PY
 
   desktop-portable-smoke:
-    name: desktop-portable-smoke
-    runs-on: ubuntu-latest
+    name: desktop-portable-smoke-${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
     needs:
       - python-validation
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux
+            os: ubuntu-latest
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+            smoke_cmd: dist/CPGenerator/CPGenerator --smoke-test
+          - label: windows
+            os: windows-latest
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+            smoke_cmd: powershell -Command "& ./dist/CPGenerator.exe --smoke-test"
+          - label: macos
+            os: macos-latest
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --runtime-hook scripts/pyinstaller_rth_library_path.py --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy --add-binary "$(brew --prefix cairo)/lib/libcairo.2.dylib:." scripts/desktop_launcher.py
+            smoke_cmd: ./dist/CPGenerator.app/Contents/MacOS/CPGenerator --smoke-test
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -q
           sudo apt-get install -y python3-tk libcairo2 libcairo2-dev pkg-config
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cairo pkg-config
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -99,11 +120,11 @@ jobs:
       - name: Sync dependencies
         run: uv sync --all-groups
 
-      - name: Freeze Linux portable app
-        run: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+      - name: Freeze portable app
+        run: ${{ matrix.freeze_cmd }}
 
       - name: Smoke-test frozen launcher
-        run: dist/CPGenerator/CPGenerator --smoke-test
+        run: ${{ matrix.smoke_cmd }}
 
   android-validation:
     name: android-validation
