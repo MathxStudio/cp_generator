@@ -138,6 +138,69 @@ This Delaunay stage is not itself a flat-foldability theorem. Its role is to
 provide a planar graph with reasonably regular local geometry so that the later
 angle constraints are numerically meaningful.
 
+\section{Workflow-level genericity guard}
+
+The local flat-foldability equations alone do not prevent a numerically
+collapsed sample in which two vertices become arbitrarily close. The workflow
+therefore adds a scale-normalized geometric genericity test before it accepts a
+sample as ``green''.
+
+\begin{definition}[Minimum vertex separation]
+For an embedded pattern $\CP=(G,X,\tau)$ on a square of side length $s$, define
+\[
+\delta_{\min}(X)
+=
+\min_{\substack{u,v\in V\\u\ne v}}
+\norm{X_u-X_v},
+\qquad
+\rho(X)=\frac{\delta_{\min}(X)}{s}.
+\]
+\end{definition}
+
+\begin{definition}[Implemented generic-geometry predicate]
+The workflow fixes the ratio threshold
+\[
+\rho_{\min}=10^{-3}.
+\]
+It calls the geometry \emph{generic} when
+\[
+\delta_{\min}(X)\ge \rho_{\min}s.
+\]
+Equivalently,
+\[
+\operatorname{Generic}(X)
+\Longleftrightarrow
+\rho(X)\ge 10^{-3}.
+\]
+\end{definition}
+
+The pattern generator retries up to a fixed maximum number of random samples
+and returns the first generic one. If no generic sample is found, it keeps the
+best available sample, namely the one maximizing $\delta_{\min}(X)$ among those
+attempts. Likewise, the local optimizer is declared ``green'' only when
+\[
+\operatorname{Local}(\CP;\eps)
+\quad\text{and}\quad
+\operatorname{Generic}(X)
+\]
+hold simultaneously.
+
+\begin{definition}[Workflow-level local green]
+The workflow-level local success predicate is
+\[
+\operatorname{LocalGreen}(\CP;\eps)
+\Longleftrightarrow
+\operatorname{Local}(\CP;\eps)\wedge \operatorname{Generic}(X).
+\]
+\end{definition}
+
+\begin{remark}
+This genericity guard is not a theorem from classical origami theory. It is an
+implemented numerical nondegeneracy assumption, used to reject nearly
+coincident vertices for which angle diagnostics and later exact-face reasoning
+become unstable.
+\end{remark}
+
 \section{The local flat-foldability conditions}
 
 The next stage turns the geometric candidate graph into a constrained origami
@@ -639,6 +702,171 @@ This theorem describes the strongest global statement currently certified by the
 code. It is a theorem about the \emph{current embedding}, not a complete
 classification theorem for all embeddings with the same combinatorics.
 
+\section{Bounded exact stack-order checking}
+
+The exact preview solver reconstructs faces and rigid transforms, but it does
+not by itself enumerate all possible flat overlap orders. For sufficiently
+small exact instances, the project therefore runs a separate bounded exact
+checker on the extracted face arrangement.
+
+\begin{definition}[Bounded-check prerequisites]
+The bounded checker runs only if all of the following hold:
+\begin{enumerate}
+    \item $\operatorname{Status}_{\mathrm{local}}(\CP)=\Pass$,
+    \item $\operatorname{Status}_{\mathrm{assign}}(\CP)=\Pass$,
+    \item $\operatorname{Noncross}(X)$,
+    \item exact face reconstruction succeeds,
+    \item no provisional fold signs are used,
+    \item no approximate cycle closure is used, and
+    \item the extracted face count satisfies
+    \[
+    \abs{\mathcal F}\le F_{\max},
+    \qquad
+    F_{\max}=8
+    \]
+    in the current implementation.
+\end{enumerate}
+\end{definition}
+
+The checker compares faces in a near-flat, but still slightly separated, rigid
+pose. The implemented angle is
+\[
+\theta_{\mathrm{nf}}=\pi-0.08.
+\]
+Let
+\[
+P_f^{\mathrm{nf}}\subset\RR^3
+\]
+be the points of face $f$ at angle $\theta_{\mathrm{nf}}$, and let
+\[
+\overline P_f\subset\RR^2
+\]
+be the corresponding exact final flat projection.
+
+\begin{definition}[Overlap cell]
+Let $T\subset \overline P_f$ and $U\subset \overline P_g$ be triangles from the
+face triangulations. Their \emph{overlap cell} is the convex polygon
+\[
+C(T,U)=T\cap U
+\]
+computed by polygon clipping. Cells of area at most
+\[
+\eps_{\mathrm{area}}=10^{-8}
+\]
+are discarded.
+\end{definition}
+
+For each nontrivial overlap cell, the code samples the centroid
+\[
+c(T,U)\in C(T,U)
+\]
+and interpolates the two near-flat heights
+\[
+z_f\bigl(c(T,U)\bigr),
+\qquad
+z_g\bigl(c(T,U)\bigr)
+\]
+from the corresponding 3-dimensional triangles by barycentric coordinates.
+
+\begin{definition}[Pairwise overlap-order relation]
+For two distinct faces $f,g$, if every overlap cell between them satisfies
+\[
+z_f(c)-z_g(c)>\eps_z,
+\qquad
+\eps_z=10^{-7},
+\]
+then the checker records the relation
+\[
+f\succ g.
+\]
+If every overlap cell instead satisfies
+\[
+z_g(c)-z_f(c)>\eps_z,
+\]
+it records
+\[
+g\succ f.
+\]
+If some overlap cells reverse the sign, or if
+\[
+\abs{z_f(c)-z_g(c)}\le \eps_z
+\]
+on a nontrivial overlap, the checker fails immediately.
+\end{definition}
+
+Thus the checker constructs a directed relation
+\[
+R\subset \mathcal F\times\mathcal F,
+\]
+interpreted as a partial overlap order on faces. The bounded exact problem is
+then whether $R$ admits a linear extension.
+
+\begin{definition}[Bounded stack order]
+A \emph{bounded stack order} for the extracted arrangement is a permutation
+\[
+(f_{i_1},\dots,f_{i_m})
+\]
+of $\mathcal F$ such that
+\[
+(f,g)\in R
+\Longrightarrow
+f \text{ appears before } g.
+\]
+\end{definition}
+
+The implementation counts bounded stack orders by a bitmask dynamic program. If
+\[
+\operatorname{Pred}(f)=\set{g:(g,f)\in R},
+\]
+and if $N(S)$ denotes the number of admissible completions from the already
+placed face set $S\subseteq\mathcal F$, then
+\[
+N(S)=
+\sum_{\substack{f\in \mathcal F\setminus S\\ \operatorname{Pred}(f)\subseteq S}}
+N(S\cup\set{f}),
+\qquad
+N(\mathcal F)=1.
+\]
+The count is truncated above by
+\[
+N_{\max}=100000.
+\]
+
+\begin{proposition}[Meaning of a bounded exact-check pass]
+If the bounded checker returns $\Pass$, then the extracted relation $R$ admits
+at least one bounded stack order. If it returns $\Pass$ with unique-order flag,
+then exactly one bounded stack order was found before the truncation limit was
+reached.
+\end{proposition}
+
+\begin{proof}
+The dynamic program above counts precisely the linear extensions of the
+predecessor relation encoded by $R$, truncated only when the count exceeds
+$N_{\max}$. A positive count therefore certifies existence of at least one
+linear extension, and count $1$ certifies uniqueness.
+\end{proof}
+
+\begin{proposition}[Meaning of a cyclic bounded failure]
+If the bounded checker returns failure with message ``cyclic stack-order
+constraint'', then the extracted relation $R$ has no linear extension, hence no
+bounded stack order compatible with all sampled overlap constraints.
+\end{proposition}
+
+\begin{proof}
+The cited failure branch is reached exactly when the topological-order counter
+returns $0$. A directed acyclic predecessor relation has at least one linear
+extension, so zero count means that the extracted overlap-order constraints are
+incompatible.
+\end{proof}
+
+\begin{remark}
+This bounded checker is still not a complete global flat-foldability algorithm.
+It is a small-instance certificate on the exact face arrangement actually
+constructed by the solver, and it is philosophically closest to the
+overlap-order viewpoint used in the flat-folding complexity literature
+{\cite{bern_hayes,eppstein_flat}}.
+\end{remark}
+
 \section{3D folding and fallback preview}
 
 Once exact face reconstruction is available, the project builds a kinematic 3D
@@ -651,7 +879,8 @@ T_g^{(3D)}
 R_{(p,q)}\!\bigl(\operatorname{sgn}(e)\theta\bigr)T_f^{(3D)}.
 \]
 This rigid-hinge viewpoint is the standard rigid-plate abstraction used for the
-preview stage; compare the rigid-origami literature {\cite{abel_rigid}}.
+preview stage; compare the rigid-origami literature
+{\cite{abel_rigid,tachi_simulation}}.
 
 The current implementation exposes three exact-preview motion families.
 
@@ -796,6 +1025,33 @@ statements separate.
 \]
 \end{definition}
 
+The automation layer also uses two compound predicates.
+
+\begin{definition}[Workflow-level green predicates]
+The local optimization loop uses $\operatorname{LocalGreen}$ above, while the
+full automation predicate is
+\[
+\begin{aligned}
+\operatorname{AllGreen}(\CP)
+\Longleftrightarrow\;&
+\operatorname{Status}_{\mathrm{local}}(\CP)=\Pass
+\wedge
+\operatorname{Status}_{\mathrm{assign}}(\CP)=\Pass
+\\
+&\wedge
+\operatorname{Status}_{\mathrm{global}}(\CP)=\Pass
+\wedge
+\operatorname{Status}_{\mathrm{preview}}(\CP)=\Pass.
+\end{aligned}
+\]
+\end{definition}
+
+\begin{remark}
+Thus the word ``green'' has two different implemented meanings: one local and
+geometric, used during optimization; and one global four-status conjunction,
+used by the full search workflows.
+\end{remark}
+
 \section{Scope and limitations}
 
 The project combines rigorous local constraints with a partly rigorous and
@@ -841,6 +1097,11 @@ Zachary Abel, Jason Cantarella, Erik D. Demaine, David Eppstein, Thomas C.
 Hull, Jason S. Ku, Robert J. Lang, and Tomohiro Tachi.
 \newblock \emph{Rigid Origami Vertices: Conditions and Forcing Sets}.
 \newblock Journal of Computational Geometry, 2017.
+
+\bibitem{tachi_simulation}
+Tomohiro Tachi.
+\newblock \emph{Simulation of Rigid Origami}.
+\newblock In \emph{Origami$^4$}, 2009.
 
 \bibitem{eppstein_flat}
 David Eppstein.

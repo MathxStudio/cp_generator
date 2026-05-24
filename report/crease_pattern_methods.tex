@@ -148,6 +148,44 @@ angles used later are numerically stable.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm Ib — Generic geometry guard}
+\begin{columns}[T,onlytextwidth]
+\column{0.50\textwidth}
+\begin{block}{Scale-normalized separation}
+\small
+\[
+\delta_{\min}(X)=\min_{u\ne v}\norm{X_u-X_v},
+\qquad
+\rho(X)=\frac{\delta_{\min}(X)}{s}.
+\]
+The workflow calls the sample \alert{generic} when
+\[
+\rho(X)\ge 10^{-3}.
+\]
+\end{block}
+
+\smallskip
+\small The random generator retries until it finds a generic sample, or else
+keeps the best available attempt, meaning the one with largest
+\(\delta_{\min}(X)\).
+
+\column{0.46\textwidth}
+\begin{alertblock}{Why this is separate from Kawasaki}
+\small A pattern can satisfy the local angle equations numerically while two
+vertices are almost coincident. That makes cyclic-order data unstable and can
+poison later exact-face reconstruction.
+\end{alertblock}
+
+\smallskip
+\small So workflow-level ``local green'' really means
+\[
+\text{local pass}\ \wedge\ \text{generic geometry}.
+\]
+\textcolor{cpmid}{\small This is an implemented numerical guard, not a classical origami theorem.}
+\end{columns}
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm II — Parity repair \& Kawasaki optimization}
 \begin{columns}[T,onlytextwidth]
 \column{0.48\textwidth}
@@ -294,7 +332,7 @@ the method falls back to per-triangle propagation along a spanning tree.
 \end{block}
 
 \column{0.48\textwidth}
-\textbf{Kinematic animation \cite{abel_rigid}}\\[4pt]
+\textbf{Kinematic animation \cite{abel_rigid,tachi_simulation}}\\[4pt]
 Around crease axis \((p,q)\), with sign \(\sigma(e)\in\{\pm 1\}\) and fold
 angle \(\theta\):
 \[
@@ -469,33 +507,76 @@ flat-foldability. \textcolor{cpmid}{\cite{hull_zakharevich,eppstein_flat}}
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm VIb — Bounded exact stack-order checker}
+\begin{columns}[T,onlytextwidth]
+\column{0.50\textwidth}
+\begin{block}{When the checker runs}
+\scriptsize Only on exact face reconstructions with
+\begin{itemize}\scriptsize
+  \item local pass,
+  \item complete Maekawa-valid MV assignment,
+  \item no crossing folds,
+  \item no provisional signs or approximate cycle closure,
+  \item and at most \(8\) faces.
+\end{itemize}
+It samples the near-flat pose at
+\[
+\theta_{\mathrm{nf}}=\pi-0.08.
+\]
+\end{block}
+
+\column{0.46\textwidth}
+\begin{alertblock}{Order relation on overlaps}
+\scriptsize For each overlapping triangle cell \(C\), compute its centroid
+\(c_C\), interpolate the two heights \(z_f(c_C)\) and \(z_g(c_C)\), and record
+\[
+f\succ g\quad\text{or}\quad g\succ f.
+\]
+If the sign reverses across overlap cells, or the heights become numerically
+indistinguishable, the bounded check fails.
+\end{alertblock}
+\end{columns}
+
+\medskip
+\scriptsize The resulting predecessor graph is counted by a bitmask DP over
+topological orders, capped at \(10^5\). Pass means at least one bounded stack
+order exists; uniqueness means exactly one was found. This is a small-instance
+certificate in the overlap-order spirit of \textcolor{cpmid}{\cite{bern_hayes,eppstein_flat}}.
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{The whole mathematical picture}
 \begin{block}{Pipeline as one implication chain}
-\footnotesize
+\scriptsize
 \[
+\begin{aligned}
 \text{sample points}
-\Longrightarrow
+&\Longrightarrow
 \text{planar candidate graph}
 \Longrightarrow
-\text{even-degree repair}
+\text{generic geometry}
 \Longrightarrow
+\text{even-degree repair}
+\\
+&\Longrightarrow
 \text{small Kawasaki residual}
-\]
-\[
 \Longrightarrow
 \text{locally admissible MV constraints}
 \Longrightarrow
 \text{exact search over sign groups}
-\Longrightarrow
-\text{current assignment } \sigma
-\]
-\[
+\\
+&\Longrightarrow
+\text{current assignment }\sigma
 \Longrightarrow
 \text{face extraction}
 \Longrightarrow
 \text{reflection compatibility}
+\\
+&\Longrightarrow
+\text{exact or warning-level preview}
 \Longrightarrow
-\text{exact or warning-level preview}.
+\text{bounded stack-order check on small exact cases.}
+\end{aligned}
 \]
 \end{block}
 
@@ -517,6 +598,7 @@ procedure for arbitrary multi-vertex flat-foldability.
   \item Maekawa verification on a complete assignment \(\sigma\).
   \item Explicit detection of nonincident crease crossings.
   \item Exact face reconstruction on the current geometry.
+  \item Bounded stack-order existence for exact instances with at most \(8\) faces.
 \end{itemize}
 \end{block}
 
@@ -554,6 +636,11 @@ Thomas C. Hull.
 Zachary Abel, Jason Cantarella, Erik D. Demaine, David Eppstein, Thomas C. Hull, Jason S. Ku, Robert J. Lang, and Tomohiro Tachi.
 \newblock \emph{Rigid Origami Vertices: Conditions and Forcing Sets}.
 \newblock Journal of Computational Geometry, 2015.
+
+\bibitem[Tac09]{tachi_simulation}
+Tomohiro Tachi.
+\newblock \emph{Simulation of Rigid Origami}.
+\newblock In \emph{Origami$^4$}, 2009.
 
 \bibitem[Epp23]{eppstein_flat}
 David Eppstein.
