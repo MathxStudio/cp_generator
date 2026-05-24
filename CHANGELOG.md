@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-24
+
+### Fixed
+- Replaced the broken package-relative desktop launcher path in portable builds with an absolute-import launcher that works in frozen release bundles.
+- Added source and frozen-binary smoke tests to CI and release workflows so desktop assets are verified before publication.
+
 ## [0.3.1] - 2026-05-24
 
 ### Fixed
