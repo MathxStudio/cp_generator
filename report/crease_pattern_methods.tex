@@ -347,48 +347,84 @@ visible near full closure.
 % ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm IVb — Exact preview motion families}
 \begin{columns}[T,onlytextwidth]
-\column{0.50\textwidth}
+\column{0.52\textwidth}
 \begin{block}{Legacy layered}
-\footnotesize Render the exact tree pose and blend late into a separated flat
-stack:
+\footnotesize Intuition: keep the original tree pose almost to the end, then
+peel layers apart so the final flat stack stays readable.
 \[
 P_f^{\mathrm{legacy}}(t)
 =
-\bigl(1-s(t)\bigr)P_f^{\mathrm{tree}}(t)+s(t)L_f.
+\bigl(1-s_{0.72,1}(t)\bigr)P_f^{\mathrm{tree}}(t)+s_{0.72,1}(t)L_f.
 \]
 \end{block}
 
 \begin{block}{Balanced stack}
-\footnotesize Close seams by averaging shared vertices and rigidly refitting
-each face, then blend to a thinner final stack:
+\footnotesize Intuition: average the copies of each shared vertex, rigidly
+refit whole faces, then blend to a thinner display stack.
 \[
+\begin{aligned}
+Q_f^{\mathrm{bal}}(t)
+&=
+\mathcal R_{k(t),0.88}(P^{\mathrm{tree}}(t))_f,\\
 P_f^{\mathrm{bal}}(t)
-=
-\bigl(1-s(t)\bigr)\mathcal R(P^{\mathrm{tree}}(t))_f+s(t)B_f.
+&=
+\bigl(1-s_{0.76,1}(t)\bigr)Q_f^{\mathrm{bal}}(t)+s_{0.76,1}(t)B_f.
+\end{aligned}
 \]
 \end{block}
 
-\column{0.46\textwidth}
+\column{0.44\textwidth}
 \begin{alertblock}{Seamless rigid}
-\footnotesize At sample times \(t_j\), solve per-face rigid transforms by
+\footnotesize Intuition: use the exact fold only as a guide, but re-solve a
+connected rigid configuration at sample times so seams stay shut and the end
+frame is exact.
 \[
-\min \lambda_s E_{\mathrm{seam}}
-+\lambda_g E_{\mathrm{guide}}
-+\lambda_h E_{\mathrm{hinge}},
+t_j=\frac{j}{12},
+\qquad
+j=0,\dots,12.
 \]
-so seams close, faces stay near the exact guide pose, and neighboring faces
-track the guide hinge rotation.
-
-\smallskip
-Accepted samples are interpolated by SLERP. If one sample fails, hold the
-nearest solved exact sample instead of jumping to the older gappy fallback.
-At \(t=1\), render the exact folded figure.
+\footnotesize At each sample:
+\[
+\min 130\,E_{\mathrm{seam}}
++0.34\,E_{\mathrm{guide}}
++0.75\,E_{\mathrm{hinge}},
+\]
+\footnotesize then interpolate solved neighbors by SLERP and use nearest-solved
+hold instead of the old gappy fallback.
 \end{alertblock}
 \end{columns}
 
 \smallskip
 \footnotesize If exact face reconstruction itself fails, the app still drops to
 the guarded triangle-mesh preview.
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm IVc — What the 3D math actually proves}
+\begin{block}{Legacy layered}
+\footnotesize For \(t\le0.72\), the renderer is exactly the rigid tree pose.
+At \(t=1\), it is exactly the separated stack \(L_f\). The path is continuous,
+but the final affine peel-away is generally \alert{not} rigid.
+\end{block}
+
+\begin{block}{Balanced stack}
+\footnotesize Every relaxation sweep is a rigid fit of the whole face, so the
+seam-closing stage preserves each face's internal distances. Already-closed
+rigid states are fixed points. The displayed endpoint is the balanced stack
+\(B_f\), not the exact folded figure.
+\end{block}
+
+\begin{alertblock}{Seamless rigid and mesh fallback}
+\footnotesize Every accepted seamless-rigid sample and every SLERP
+interpolation between solved neighbors is facewise rigid, with accepted samples
+satisfying shared-edge gap \(\le 0.02\). The exact mode starts at the source
+shape and ends at the exact folded figure. If exact faces fail entirely, the
+mesh fallback still keeps each triangle rigid on its tree pose, but remains
+heuristic and warning-level.
+\end{alertblock}
+
+\smallskip
+\footnotesize Full definitions and proofs are written out in the formal notes.
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
