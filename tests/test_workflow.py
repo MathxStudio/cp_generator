@@ -140,10 +140,10 @@ class PreviewPayloadTests(unittest.TestCase):
 
         self.assertIsNotNone(preview.payload)
         assert preview.payload is not None
-        self.assertEqual(preview.payload["default_motion_profile"], "balanced_stack")
+        self.assertEqual(preview.payload["default_motion_profile"], "legacy_layered")
         self.assertEqual(
             [profile["key"] for profile in preview.payload["motion_profiles"]],
-            ["balanced_stack", "rigid_panels"],
+            ["legacy_layered", "balanced_stack", "rigid_panels"],
         )
 
     def test_mesh_preview_payload_only_lists_balanced_profile(self) -> None:
@@ -153,10 +153,10 @@ class PreviewPayloadTests(unittest.TestCase):
 
         self.assertIsNotNone(preview.payload)
         assert preview.payload is not None
-        self.assertEqual(preview.payload["default_motion_profile"], "balanced_stack")
+        self.assertEqual(preview.payload["default_motion_profile"], "legacy_layered")
         self.assertEqual(
             [profile["key"] for profile in preview.payload["motion_profiles"]],
-            ["balanced_stack"],
+            ["legacy_layered", "balanced_stack"],
         )
 
 

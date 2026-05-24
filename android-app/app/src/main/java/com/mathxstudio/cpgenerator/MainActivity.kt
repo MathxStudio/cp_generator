@@ -100,7 +100,7 @@ private const val UPDATE_REPOSITORY = "MathxStudio/cp_generator"
 private const val UPDATE_API_URL = "https://api.github.com/repos/$UPDATE_REPOSITORY/releases/latest"
 private const val DEFAULT_CAMERA_YAW = -0.55f
 private const val DEFAULT_CAMERA_PITCH = 0.42f
-private const val DEFAULT_PREVIEW_MOTION_PROFILE = "balanced_stack"
+private const val DEFAULT_PREVIEW_MOTION_PROFILE = "legacy_layered"
 
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel> {
@@ -1307,7 +1307,7 @@ data class PreviewModel(
             ?: motionProfiles.firstOrNull()
             ?: PreviewMotionProfile(
                 key = DEFAULT_PREVIEW_MOTION_PROFILE,
-                label = "Balanced stack",
+                label = "Legacy layered",
                 description = "",
                 bounds = PreviewBounds(0f, 0f, 0f, 0f, 0f, 0f),
                 frames = emptyList(),
@@ -1914,7 +1914,7 @@ private fun parseSnapshot(raw: String): MobileSnapshot {
                 listOf(
                     PreviewMotionProfile(
                         key = defaultMotionProfile,
-                        label = "Balanced stack",
+                        label = "Legacy layered",
                         description = "",
                         bounds = parsePreviewBounds(previewObject.getJSONObject("bounds")),
                         frames = parsePreviewFrames(previewObject.getJSONArray("frames")),

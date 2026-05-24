@@ -1394,7 +1394,7 @@ class CPGeneratorApp:
 
         preview_hint = ttk.Label(
             preview_card,
-            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Balanced stack keeps a slight display thickness, while rigid panels stays face-rigid when the exact solver can support it.",
+            text="Drag to orbit, Shift-drag to roll, scroll to zoom, double-click to reset. Legacy layered restores the original dissected fold preview, balanced stack is the newer seam-closing option, and rigid panels is exact-only.",
             style="CardMuted.TLabel",
             justify="left",
         )
@@ -3620,9 +3620,10 @@ class CPGeneratorApp:
             )
             return
 
+        active_motion_profile = self._active_preview_motion_profile()
         states = self.preview_model.frame(
             self.preview_progress_var.get(),
-            motion_profile=self._active_preview_motion_profile(),
+            motion_profile=active_motion_profile,
         )
         if not states:
             return
@@ -3674,6 +3675,7 @@ class CPGeneratorApp:
             screen_states.append([to_screen(point) for point in points])
 
         faces_to_draw: list[tuple[float, list[float], str]] = []
+        triangles_to_draw: list[tuple[float, list[float], str]] = []
         edge_segments: dict[
             tuple[int, int],
             tuple[float, tuple[float, float], tuple[float, float], str, float],
@@ -3704,9 +3706,18 @@ class CPGeneratorApp:
             )
             fill_color = self._shade_color(base_color, brightness)
 
-            face_depth = float(np.mean(view_points[:, 2]))
-            flat_points = [coord for point in screen_points for coord in point]
-            faces_to_draw.append((face_depth, flat_points, fill_color))
+            if active_motion_profile == fold_sim.PREVIEW_MOTION_LEGACY_LAYERED:
+                for triangle in state.triangles:
+                    triangle_points = [screen_points[index] for index in triangle]
+                    triangle_depth = float(
+                        np.mean([view_points[index][2] for index in triangle])
+                    )
+                    flat_points = [coord for point in triangle_points for coord in point]
+                    triangles_to_draw.append((triangle_depth, flat_points, fill_color))
+            else:
+                face_depth = float(np.mean(view_points[:, 2]))
+                flat_points = [coord for point in screen_points for coord in point]
+                faces_to_draw.append((face_depth, flat_points, fill_color))
 
             face_edge_keys = getattr(self.preview_model, "face_edge_keys", ())
             edge_render_kind = getattr(self.preview_model, "edge_render_kind", {})
@@ -3729,16 +3740,28 @@ class CPGeneratorApp:
                         )
                     )
 
-        for _, flat_points, fill_color in sorted(
-            faces_to_draw, key=lambda item: item[0]
-        ):
-            canvas.create_polygon(
-                *flat_points,
-                fill=fill_color,
-                outline=fill_color,
-                width=1.0,
-                joinstyle=tk.ROUND,
-            )
+        if active_motion_profile == fold_sim.PREVIEW_MOTION_LEGACY_LAYERED:
+            for _, flat_points, fill_color in sorted(
+                triangles_to_draw, key=lambda item: item[0]
+            ):
+                canvas.create_polygon(
+                    *flat_points,
+                    fill=fill_color,
+                    outline=fill_color,
+                    width=1.0,
+                    joinstyle=tk.ROUND,
+                )
+        else:
+            for _, flat_points, fill_color in sorted(
+                faces_to_draw, key=lambda item: item[0]
+            ):
+                canvas.create_polygon(
+                    *flat_points,
+                    fill=fill_color,
+                    outline=fill_color,
+                    width=1.0,
+                    joinstyle=tk.ROUND,
+                )
 
         if color_edge_families:
             segments_to_draw: list[

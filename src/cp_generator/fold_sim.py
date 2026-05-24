@@ -12,9 +12,10 @@ from . import core as cp
 
 BOUNDARY = "boundary"
 FOLD = "fold"
+PREVIEW_MOTION_LEGACY_LAYERED = "legacy_layered"
 PREVIEW_MOTION_BALANCED_STACK = "balanced_stack"
 PREVIEW_MOTION_RIGID_PANELS = "rigid_panels"
-DEFAULT_PREVIEW_MOTION_PROFILE = PREVIEW_MOTION_BALANCED_STACK
+DEFAULT_PREVIEW_MOTION_PROFILE = PREVIEW_MOTION_LEGACY_LAYERED
 
 
 class FoldSimulationError(RuntimeError):
@@ -73,6 +74,11 @@ class FoldSimulationDiagnostic:
 
 EXACT_PREVIEW_MOTION_PROFILES = (
     PreviewMotionProfileSpec(
+        key=PREVIEW_MOTION_LEGACY_LAYERED,
+        label="Legacy layered",
+        description="Uses the original dissected fold preview and separated flat stack from the prior release.",
+    ),
+    PreviewMotionProfileSpec(
         key=PREVIEW_MOTION_BALANCED_STACK,
         label="Balanced stack",
         description="Closes seams during motion and keeps a modest display thickness at the finish.",
@@ -83,7 +89,10 @@ EXACT_PREVIEW_MOTION_PROFILES = (
         description="Keeps polygon faces rigid through the motion and avoids the flattened display stack.",
     ),
 )
-MESH_PREVIEW_MOTION_PROFILES = (EXACT_PREVIEW_MOTION_PROFILES[0],)
+MESH_PREVIEW_MOTION_PROFILES = (
+    EXACT_PREVIEW_MOTION_PROFILES[0],
+    EXACT_PREVIEW_MOTION_PROFILES[1],
+)
 PREVIEW_MOTION_PROFILE_BY_KEY = {
     spec.key: spec
     for spec in EXACT_PREVIEW_MOTION_PROFILES
@@ -172,8 +181,18 @@ class FoldedFigureModel:
             bool(np.linalg.det(transform[:2, :2]) > 0)
             for transform in flat_transforms
         )
-        self.layer_offsets = self._build_layer_offsets()
-        self.final_face_points = self._build_final_face_points()
+        self.layer_offsets = self._build_layer_offsets(
+            thickness_divisor=18.0,
+            minimum_thickness=0.02,
+        )
+        self.final_face_points = self._build_final_face_points(self.layer_offsets)
+        self._balanced_layer_offsets = self._build_layer_offsets(
+            thickness_divisor=220.0,
+            minimum_thickness=0.006,
+        )
+        self._balanced_stack_face_points = self._build_final_face_points(
+            self._balanced_layer_offsets
+        )
         self._closed_face_points = self._relaxed_face_points(
             self.face_points_at_angle(self.max_angle),
             iterations=6,
@@ -181,13 +200,18 @@ class FoldedFigureModel:
         )
         self._balanced_final_face_points = _blend_face_points(
             self._closed_face_points,
-            self.final_face_points,
+            self._balanced_stack_face_points,
             0.36,
         )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
         self.is_mesh_approximation = False
 
-    def _build_layer_offsets(self) -> tuple[float, ...]:
+    def _build_layer_offsets(
+        self,
+        *,
+        thickness_divisor: float,
+        minimum_thickness: float,
+    ) -> tuple[float, ...]:
         nearly_flat = self._pose_tree(math.pi - 0.08)
         scores: list[tuple[float, float, float, int]] = []
         for index, face in enumerate(self.faces):
@@ -197,7 +221,10 @@ class FoldedFigureModel:
 
         scores.sort()
         span = float(np.ptp(self.coords[:, 0]) + np.ptp(self.coords[:, 1]))
-        thickness = max(span / max(len(self.faces) * 220.0, 1.0), 0.006)
+        thickness = max(
+            span / max(len(self.faces) * thickness_divisor, 1.0),
+            minimum_thickness,
+        )
         offsets = [0.0] * len(self.faces)
         for rank, (_, _, _, index) in enumerate(scores):
             offsets[index] = rank * thickness
@@ -235,13 +262,16 @@ class FoldedFigureModel:
             strength=strength,
         )
 
-    def _build_final_face_points(self) -> tuple[np.ndarray, ...]:
+    def _build_final_face_points(
+        self,
+        layer_offsets: tuple[float, ...],
+    ) -> tuple[np.ndarray, ...]:
         states: list[np.ndarray] = []
         for index, face in enumerate(self.faces):
             flat_points = []
             for vertex_index in face.vertices:
                 point = _apply_transform_2d(self.flat_transforms[index], self.coords[vertex_index])
-                flat_points.append([point[0], point[1], self.layer_offsets[index]])
+                flat_points.append([point[0], point[1], layer_offsets[index]])
             states.append(np.array(flat_points, dtype=float))
         return tuple(states)
 
@@ -308,6 +338,12 @@ class FoldedFigureModel:
         eased = _ease_in_out(progress)
         posed_points = self.face_points_at_angle(self.max_angle * eased)
 
+        if motion_profile == PREVIEW_MOTION_LEGACY_LAYERED:
+            settle = _smoothstep(0.72, 1.0, progress)
+            return self._render_states(
+                _blend_face_points(posed_points, self.final_face_points, settle)
+            )
+
         if motion_profile == PREVIEW_MOTION_RIGID_PANELS:
             relaxed = self._relaxed_face_points(
                 posed_points,
@@ -372,8 +408,18 @@ class ApproximateFoldedFigureModel:
         self.edge_render_kind: dict[tuple[int, int], str] = {}
         self.edge_boundary_groups: dict[tuple[int, int], int] = {}
         self.max_angle = math.radians(76 if settle_to_flat else 88)
-        self.layer_offsets = self._build_layer_offsets()
-        self.final_face_points = self._build_final_face_points()
+        self.layer_offsets = self._build_layer_offsets(
+            thickness_divisor=30.0,
+            minimum_thickness=0.02,
+        )
+        self.final_face_points = self._build_final_face_points(self.layer_offsets)
+        self._balanced_layer_offsets = self._build_layer_offsets(
+            thickness_divisor=280.0,
+            minimum_thickness=0.004,
+        )
+        self._balanced_stack_face_points = self._build_final_face_points(
+            self._balanced_layer_offsets
+        )
         closed_angle_scale = self.max_angle * (
             self.final_angle_scale if not self.settle_to_flat else 1.0
         )
@@ -385,12 +431,17 @@ class ApproximateFoldedFigureModel:
         balanced_blend = 0.44 if self.settle_to_flat else 0.18
         self._balanced_final_face_points = _blend_face_points(
             self._closed_face_points,
-            self.final_face_points,
+            self._balanced_stack_face_points,
             balanced_blend,
         )
         self.final_centroid = self._compute_overall_centroid(self.final_face_points)
 
-    def _build_layer_offsets(self) -> tuple[float, ...]:
+    def _build_layer_offsets(
+        self,
+        *,
+        thickness_divisor: float,
+        minimum_thickness: float,
+    ) -> tuple[float, ...]:
         offsets = [0.0] * len(self.faces)
         depth_map = {self.tree_order[0]: 0} if self.tree_order else {}
         for face_index in self.tree_order[1:]:
@@ -399,7 +450,10 @@ class ApproximateFoldedFigureModel:
             increment = 1 if edge_key is not None and self.edge_is_fold.get(edge_key, False) else 0
             depth_map[face_index] = depth_map.get(parent, 0) + increment
         span = float(max(np.ptp(self.coords[:, 0]), np.ptp(self.coords[:, 1]), 1.0))
-        thickness = max(span / max(len(self.faces) * 280.0, 1.0), 0.004)
+        thickness = max(
+            span / max(len(self.faces) * thickness_divisor, 1.0),
+            minimum_thickness,
+        )
         for index in range(len(self.faces)):
             offsets[index] = depth_map.get(index, 0) * thickness
         if offsets:
@@ -438,13 +492,16 @@ class ApproximateFoldedFigureModel:
 
         return tuple(transform for transform in transforms if transform is not None)
 
-    def _build_final_face_points(self) -> tuple[np.ndarray, ...]:
+    def _build_final_face_points(
+        self,
+        layer_offsets: tuple[float, ...],
+    ) -> tuple[np.ndarray, ...]:
         if not self.settle_to_flat:
             transforms = self._pose_tree(self.max_angle * self.final_angle_scale)
             states: list[np.ndarray] = []
             for index, face in enumerate(self.faces):
                 pose_points = []
-                depth_offset = self.layer_offsets[index]
+                depth_offset = layer_offsets[index]
                 for vertex_index in face.vertices:
                     point = _apply_transform_3d(transforms[index], self.coords[vertex_index]).copy()
                     point[2] += depth_offset
@@ -457,7 +514,7 @@ class ApproximateFoldedFigureModel:
             flat_points = []
             for vertex_index in face.vertices:
                 point = _apply_transform_2d(self.flat_transforms[index], self.coords[vertex_index])
-                flat_points.append([point[0], point[1], self.layer_offsets[index]])
+                flat_points.append([point[0], point[1], layer_offsets[index]])
             states.append(np.array(flat_points, dtype=float))
         return tuple(states)
 
@@ -519,6 +576,15 @@ class ApproximateFoldedFigureModel:
         )
         eased = _ease_in_out(progress)
         posed_points = self._pose_points(self.max_angle * eased)
+
+        if motion_profile == PREVIEW_MOTION_LEGACY_LAYERED:
+            settle = _smoothstep(0.70, 1.0, progress)
+            if not self.settle_to_flat:
+                settle = _smoothstep(0.82, 1.0, progress)
+            return self._render_states(
+                _blend_face_points(posed_points, self.final_face_points, settle)
+            )
+
         relaxed = self._relaxed_face_points(
             posed_points,
             iterations=3 if progress < 0.65 else 4,
@@ -527,8 +593,6 @@ class ApproximateFoldedFigureModel:
         settle = _smoothstep(0.72, 1.0, progress)
         if not self.settle_to_flat:
             settle = _smoothstep(0.84, 1.0, progress)
-        if motion_profile != PREVIEW_MOTION_BALANCED_STACK:
-            motion_profile = PREVIEW_MOTION_BALANCED_STACK
         return self._render_states(
             _blend_face_points(relaxed, self._balanced_final_face_points, settle)
         )
