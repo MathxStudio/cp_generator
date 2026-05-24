@@ -12,15 +12,18 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onedir --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+            smoke_cmd: dist/CPGenerator/CPGenerator --smoke-test
             archive_cmd: tar -czf cp-generator-linux-portable.tar.gz -C dist CPGenerator
             archive_path: cp-generator-linux-portable.tar.gz
           - os: windows-latest
-            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+            smoke_cmd: powershell -Command "& ./dist/CPGenerator.exe --smoke-test"
             archive_cmd: powershell -Command "Compress-Archive -Path dist/CPGenerator.exe -DestinationPath cp-generator-windows-portable.zip -Force"
             archive_path: cp-generator-windows-portable.zip
           - os: macos-latest
-            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy src/cp_generator/__main__.py
+            freeze_cmd: uv run pyinstaller --noconfirm --clean --windowed --onefile --name CPGenerator --hidden-import tkinter --hidden-import tkinter.ttk --collect-all scipy scripts/desktop_launcher.py
+            smoke_cmd: ./dist/CPGenerator --smoke-test
             archive_cmd: ditto -c -k --sequesterRsrc dist/CPGenerator cp-generator-macos-portable.zip
             archive_path: cp-generator-macos-portable.zip
 
@@ -49,6 +52,9 @@ jobs:
 
       - name: Freeze application
         run: ${{ matrix.freeze_cmd }}
+
+      - name: Smoke-test frozen application
+        run: ${{ matrix.smoke_cmd }}
 
       - name: Archive bundle
         run: ${{ matrix.archive_cmd }}
