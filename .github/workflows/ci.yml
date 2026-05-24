@@ -36,7 +36,14 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Install uv (Windows, no cache)
+        if: runner.os == 'Windows'
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
       - name: Install uv
+        if: runner.os != 'Windows'
         uses: astral-sh/setup-uv@v6
 
       - name: Sync dependencies
