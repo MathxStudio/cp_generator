@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and versions use the repository's Git t
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-05-24
+
+### Fixed
+- Bundled the macOS cairo runtime into portable desktop builds and switched the macOS artifact path to a portable `.app` bundle so frozen previews launch without a Homebrew cairo install.
+- Expanded PR portable smoke coverage across Linux, Windows, and macOS so release-only packaging regressions are caught before merge.
+
 ## [0.3.2] - 2026-05-24
 
 ### Fixed
