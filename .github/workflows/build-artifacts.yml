@@ -36,14 +36,7 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install uv (Windows, no cache)
-        if: runner.os == 'Windows'
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: false
-
       - name: Install uv
-        if: runner.os != 'Windows'
         uses: astral-sh/setup-uv@v6
 
       - name: Sync dependencies
@@ -187,7 +180,14 @@ jobs:
         with:
           python-version: "3.14"
 
+      - name: Install uv (Windows, no cache)
+        if: runner.os == 'Windows'
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
       - name: Install uv
+        if: runner.os != 'Windows'
         uses: astral-sh/setup-uv@v6
 
       - name: Sync dependencies
@@ -199,7 +199,48 @@ jobs:
       - name: Smoke-test frozen application
         run: ${{ matrix.smoke_cmd }}
 
+      - name: Wait for Windows launcher to unlock
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $deadline = (Get-Date).AddSeconds(20)
+          while ((Get-Date) -lt $deadline) {
+            $processes = Get-Process CPGenerator -ErrorAction SilentlyContinue
+            if ($processes) {
+              $processes | Stop-Process -Force
+              Start-Sleep -Seconds 1
+              continue
+            }
+            try {
+              $stream = [System.IO.File]::Open(
+                "dist/CPGenerator.exe",
+                [System.IO.FileMode]::Open,
+                [System.IO.FileAccess]::Read,
+                [System.IO.FileShare]::None
+              )
+              $stream.Close()
+              exit 0
+            } catch {
+              Start-Sleep -Milliseconds 500
+            }
+          }
+          throw "dist/CPGenerator.exe stayed locked after the smoke test."
+
+      - name: Archive Windows bundle
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path cp-generator-windows-portable.zip) {
+            Remove-Item cp-generator-windows-portable.zip -Force
+          }
+          Compress-Archive -Path dist/CPGenerator.exe -DestinationPath cp-generator-windows-portable.zip -Force
+          if (-not (Test-Path cp-generator-windows-portable.zip)) {
+            throw "cp-generator-windows-portable.zip was not created."
+          }
+
       - name: Archive bundle
+        if: runner.os != 'Windows'
         run: ${{ matrix.archive_cmd }}
 
       - name: Upload desktop artifact
