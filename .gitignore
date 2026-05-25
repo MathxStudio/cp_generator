@@ -28,6 +28,7 @@ skills-lock.json
 ORIGAMI_THEORY_TODO.md
 PHASE1_DIAGNOSTICS_SPEC.md
 refs/
+AGENT_REBUILD_PLAYBOOK.local.md
 
 # Local release staging
 .release-assets/

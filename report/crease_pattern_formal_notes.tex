@@ -375,9 +375,58 @@ be the incident creases in cyclic order, and let
 \[
 \beta_1,\dots,\beta_r
 \]
-be the corresponding sector angles. The reduction repeatedly removes a locally
-minimal sector and records whether its two boundary creases must carry the same
-or opposite mountain--valley sign.
+be the corresponding sector angles, where $\beta_i$ lies between $e_i$ and
+$e_{i+1}$ and indices are taken cyclically.
+
+\begin{definition}[Bern--Hayes reduction state]
+For a fixed interior vertex $v$, a \emph{reduction state} is the cyclic list
+\[
+\Sigma_v=(e_1,\beta_1,e_2,\beta_2,\dots,e_r,\beta_r).
+\]
+\end{definition}
+
+\begin{definition}[Locally minimal sector]
+A sector $\beta_i$ in $\Sigma_v$ is \emph{locally minimal} when
+\[
+\beta_i\le \beta_{i-1}
+\qquad\text{and}\qquad
+\beta_i\le \beta_{i+1}.
+\]
+\end{definition}
+
+\begin{proposition}[Bern--Hayes local-minimum wedge principle {\cite{bern_hayes}}]
+For a locally flat-foldable single-vertex instance, if $\beta_i$ is locally
+minimal, then the two creases $e_i$ and $e_{i+1}$ bounding that sector may be
+reduced as one local unit and their mountain--valley labels are opposite.
+\end{proposition}
+
+The implementation imports this cited principle as a local rule and then uses a
+concrete bookkeeping step to keep the cyclic sector data consistent.
+
+\begin{definition}[Implemented interior wedge-elimination move]
+Assume $r>2$ and $\beta_i$ is locally minimal in $\Sigma_v$. The code emits the
+two-fold local group
+\[
+([e_i,e_{i+1}],[2,0]),
+\]
+meaning that $e_i$ is the local seed and $e_{i+1}$ must be opposite in sign.
+It then removes the minimal wedge from the active cyclic list by replacing
+\[
+\beta_{i-1}
+\quad\text{with}\quad
+\beta_{i-1}'=\beta_{i-1}+\beta_{i+1}-\beta_i,
+\]
+and deleting from the state the entries
+\[
+e_i,\ \beta_i,\ e_{i+1},\ \beta_{i+1}.
+\]
+\end{definition}
+
+When the active list has only two creases left, the code emits
+\[
+([e_1,e_2],[2,1]),
+\]
+meaning that the second remaining crease has the same sign as the first.
 
 \begin{definition}[Local reduction chain]
 The reduction at $v$ produces
@@ -397,13 +446,57 @@ where
 \]
 \end{definition}
 
-Boundary vertices are treated similarly, except that temporary virtual boundary
-rays are added so that the cyclic order closes. Thus the local reduction stage
-produces one or more chains of sign relations at every vertex.
+\begin{proposition}[Termination and output size for interior reduction]
+If an interior vertex has degree $r$, then the implemented Bern--Hayes
+reduction emits exactly
+\[
+\frac{r}{2}
+\]
+two-fold local groups: $\frac{r-2}{2}$ groups of type $([\,\cdot,\cdot\,],[2,0])$
+followed by one final group of type $([\,\cdot,\cdot\,],[2,1])$.
+\end{proposition}
+
+\begin{proof}
+Every nonfinal wedge-elimination move removes exactly two active creases from
+the state. Starting from $r$ active creases, after
+\[
+\frac{r-2}{2}
+\]
+such moves the state contains exactly two creases, and the implementation then
+emits one final same-sign pair.
+\end{proof}
+
+Boundary vertices are treated similarly, but the code first closes the open
+sheet boundary by adding two temporary virtual boundary folds.
+
+\begin{definition}[Boundary-augmented Bern--Hayes reduction]
+Let $v$ lie on the sheet boundary. The implementation inserts two virtual
+boundary folds through $v$ along the incident boundary side(s), rotates the
+adjacency order so the first active ray lies on the boundary, and then applies
+the same smallest-sector elimination logic as above, except that the comparison
+at the two ends is linear rather than cyclic.
+
+Whenever an emitted local group contains one or both virtual boundary folds,
+those virtual folds are deleted from the recorded output. Consequently the
+boundary reduction may emit
+\[
+([e],[2]),
+\qquad
+([e_i,e_j],[2,0]),
+\qquad
+([e_i,e_j],[2,1]).
+\]
+\end{definition}
+
+\begin{remark}
+Thus the Bern--Hayes stage does not yet produce one global assignment. It
+produces a collection of short local relation groups, one collection per
+vertex, which are later merged across shared creases.
+\end{remark}
 
 \section{Exact enumeration after chain merging}
 
-The local chains are then merged across shared creases. If the merged chains are
+The local groups are then merged across shared creases. If the merged chains are
 \[
 \Lambda_1,\dots,\Lambda_g,
 \]
@@ -412,6 +505,41 @@ its first crease. Therefore the remaining search space is
 \[
 \set{0,1}^g.
 \]
+
+\begin{definition}[Merged sign chain]
+A merged sign chain is a pair
+\[
+\Lambda_j=\bigl((e_{j,1},\dots,e_{j,m_j}),(\eta_{j,1},\dots,\eta_{j,m_j})\bigr),
+\]
+with
+\[
+\eta_{j,1}=2,
+\qquad
+\eta_{j,i}\in\set{0,1,2}\ \text{ for }i\ge2,
+\]
+interpreted as follows:
+\[
+\eta_{j,i}=0
+\Longrightarrow
+\tau(e_{j,i})=1-\tau(e_{j,i-1}),
+\]
+\[
+\eta_{j,i}=1
+\Longrightarrow
+\tau(e_{j,i})=\tau(e_{j,i-1}),
+\]
+\[
+\eta_{j,i}=2
+\Longrightarrow
+\tau(e_{j,i})\text{ remains undetermined by that chain step.}
+\]
+\end{definition}
+
+The implementation merges two local groups whenever they share an endpoint
+crease. If the shared crease appears with opposite orientations, one group is
+reversed first and its flags are reversed accordingly. This is why the runtime
+state is a collection of path-like chains rather than an arbitrary constraint
+graph.
 
 For
 \[
@@ -431,6 +559,34 @@ and then
 \[
 \eta_{j,i}=2 \Longrightarrow \tau_c(e_{j,i})=-1.
 \]
+
+\begin{proposition}[One-seed propagation along a merged chain]
+Fix one merged chain $\Lambda_j$ and one seed choice $c_j\in\set{0,1}$. Then
+every fold in that chain with flag $0$ or $1$ receives a unique propagated
+label, and every fold with flag $2$ beyond the seed remains unassigned.
+\end{proposition}
+
+\begin{proof}
+The code sets the first fold to
+\[
+\tau_c(e_{j,1})=c_j.
+\]
+Then for each $i\ge2$ it applies exactly one of the three cases above. In the
+flag-$0$ and flag-$1$ cases, the value of $\tau_c(e_{j,i})$ is a deterministic
+function of the already assigned predecessor $\tau_c(e_{j,i-1})$. In the
+flag-$2$ case the code writes the sentinel value $-1$, meaning ``still
+undetermined''.
+\end{proof}
+
+\begin{remark}
+Therefore the enumerated set
+\[
+\set{0,1}^g
+\]
+is \emph{not} the set of all complete mountain--valley assignments on the
+crease pattern. It is the smaller set of seed choices for the merged
+Bern--Hayes chains actually extracted by the local reduction stage.
+\end{remark}
 
 This yields a partial or complete labeling $\tau_c$. The exact admissibility
 filter is Maekawa's theorem:
@@ -455,8 +611,11 @@ $G(\tau_c)$ counts the obtuse-angle defects defined in the next section. This
 score is not a correctness condition; it is only a tie-breaker among already
 admissible assignments.
 
-\begin{proposition}[What the assignment search certifies]
+\begin{proposition}[What the Bern--Hayes search certifies]
 If the routine returns an assignment $\tau^\ast$, then
+\[
+\tau^\ast\text{ is consistent with every merged sign chain,}
+\]
 \[
 \forall v\in V_{\mathrm{int}}\;
 \abs{\mu_{\tau^\ast}(v)}=2.
@@ -469,6 +628,13 @@ satisfies Maekawa's theorem at every interior vertex.
 The code checks every seed choice in $\set{0,1}^g$, rejects every choice
 violating Maekawa, and returns only from the surviving set.
 \end{proof}
+
+\begin{remark}
+This is the key scope boundary of the Bern--Hayes stage in the project. It
+derives local sign consequences and shrinks the remaining combinatorial search,
+but by itself it does not certify global flat-foldability, overlap order, or
+even completeness of the global sign search outside the extracted chain model.
+\end{remark}
 
 \section{Maekawa-preserving repair of obtuse monochrome glitches}
 

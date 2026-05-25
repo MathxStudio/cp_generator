@@ -221,7 +221,7 @@ the square nearly fixed. Solved with SLSQP.
 % ────────────────────────────────────────────────────────────────────────────
 \begin{frame}{Algorithm III — Local constraints: Maekawa \& Bern--Hayes}
 \begin{columns}[T,onlytextwidth]
-\column{0.46\textwidth}
+\column{0.44\textwidth}
 \begin{block}{Maekawa's theorem (local) \cite{hull_math_flat}}
 At every interior vertex,
 \[
@@ -231,23 +231,72 @@ Used as an \textbf{admissibility filter}: reject any assignment violating
 this anywhere.
 \end{block}
 
-\column{0.50\textwidth}
+\column{0.54\textwidth}
 \textbf{Bern--Hayes-style reduction \cite{bern_hayes}}\\[4pt]
-For each vertex, repeatedly \alert{remove the smallest sector}: its two
-bounding creases are forced \emph{equal} or \emph{opposite} in sign.
+\scriptsize For one interior vertex, keep the cyclic state
+\[
+\Sigma_v=(e_1,\beta_1,\dots,e_r,\beta_r),
+\]
+where \(\beta_i\) lies between \(e_i\) and \(e_{i+1}\).
+
 \smallskip
-\begin{enumerate}\small
-  \item Sort creases around the vertex by angle.
-  \item Find the smallest wedge; record its forced sign relation.
-  \item Recurse until the vertex is fully resolved.
-\end{enumerate}
+\scriptsize If \(\beta_i\) is locally minimal, emit
+\[
+([e_i,e_{i+1}],[2,0]),
+\]
+\scriptsize record opposite signs, then collapse the wedge by
+\[
+\beta_{i-1}\leftarrow \beta_{i-1}+\beta_{i+1}-\beta_i.
+\]
+
 \smallskip
-\textcolor{cpmid}{\small Boundary vertices get temporary virtual rays to close the cyclic order.}
+\scriptsize When only two creases remain, emit
+\[
+([e_1,e_2],[2,1]),
+\]
+meaning the last two carry the same sign.
 \end{columns}
 \end{frame}
 
 % ────────────────────────────────────────────────────────────────────────────
-\begin{frame}{Algorithm III — Merging, exact search, \& interlacing}
+\begin{frame}{Algorithm IIIa — Boundary closure and merged sign chains}
+\begin{columns}[T,onlytextwidth]
+\column{0.50\textwidth}
+\begin{block}{Boundary vertices}
+\footnotesize Add two temporary virtual boundary rays so the local order
+closes, run the same smallest-sector elimination, then drop the virtual folds
+from the emitted groups. This yields
+\[
+([e],[2]),\qquad ([e_i,e_j],[2,0]),\qquad ([e_i,e_j],[2,1]).
+\]
+\end{block}
+
+\column{0.46\textwidth}
+\begin{alertblock}{Merged sign chain}
+\footnotesize Merge local groups whenever they share an endpoint crease:
+\[
+\Lambda=((e_1,\dots,e_m),(\eta_1,\dots,\eta_m)),
+\qquad
+\eta_1=2.
+\]
+\[
+\begin{aligned}
+\eta_i&=0:\text{ opposite},\\
+\eta_i&=1:\text{ same},\\
+\eta_i&=2:\text{ still unknown}.
+\end{aligned}
+\]
+One seed bit chooses \(\sigma(e_1)\), then the rest of the chain propagates.
+\end{alertblock}
+\end{columns}
+
+\smallskip
+\footnotesize The search is only the extracted chain-seed space \(\{0,1\}^g\).
+It is not the set of all global MV assignments.
+\end{frame}
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{frame}{Algorithm IIIb — Exact search, propagation, \& interlacing}
 Each vertex reduction yields sign chains:
 \[
 \sigma(e_i)=\sigma(e_j)\quad\text{or}\quad\sigma(e_i)=-\sigma(e_j).
@@ -257,7 +306,7 @@ Each vertex reduction yields sign chains:
 \textbf{Exact search}
 \begin{itemize}\small
   \item Merge chains across shared creases into \(g\) free groups.
-  \item Enumerate all \(2^g\) seed assignments; propagate implied signs.
+  \item Enumerate all \(2^g\) seed assignments; propagate implied signs along each chain.
   \item Keep only assignments with \(\abs{M(v)-V(v)}=2\) at every interior vertex.
 \end{itemize}
 \textcolor{cpmid}{\small Undetermined creases keep label \(-1\); no sign is invented.}
