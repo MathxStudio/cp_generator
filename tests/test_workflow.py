@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -10,6 +12,7 @@ from cp_generator import workflow
 
 
 CASE_MAP = validation_corpus.case_map()
+FIXTURE_ROOT = Path(__file__).with_name("fixtures")
 
 
 def _load_payload(case_id: str) -> dict[str, object]:
@@ -19,6 +22,11 @@ def _load_payload(case_id: str) -> dict[str, object]:
 def _load_pattern(case_id: str) -> cp.CreasePattern:
     payload = _load_payload(case_id)
     return cp.CreasePattern.from_data(payload["pattern"])
+
+
+def _load_session_fixture(filename: str) -> workflow.RestoredSession:
+    payload = json.loads((FIXTURE_ROOT / filename).read_text(encoding="utf-8"))
+    return workflow.restore_session_payload(payload)
 
 
 def _pattern_from_vertices(*coords: tuple[float, float], side: float = 1.0) -> cp.CreasePattern:
@@ -108,6 +116,24 @@ class DiagnosticMergingTests(unittest.TestCase):
         self.assertEqual(merged.fold_assignment_status, cp.STATUS_FAIL)
         self.assertEqual(merged.global_status, cp.STATUS_FAIL)
         self.assertEqual(merged.global_diagnostic.basis, "certified")
+
+    def test_near_exact_kawasaki_session_stays_green_after_preview_merge(self) -> None:
+        session = _load_session_fixture("cp-v6-00.cpfold.json")
+        report = session.pattern.analyze_pattern()
+
+        self.assertEqual(report.local_status, cp.STATUS_PASS)
+        self.assertEqual(report.fold_assignment_status, cp.STATUS_PASS)
+
+        preview = workflow.build_preview(
+            session.pattern,
+            preview_reference_pattern=session.preview_reference_pattern,
+            allow_reference_fallback=session.preview_reference_pattern is not None,
+        )
+        merged = workflow.merge_report_with_preview(report, preview.diagnostic)
+
+        self.assertEqual(preview.diagnostic.status, cp.STATUS_PASS)
+        self.assertEqual(merged.global_status, cp.STATUS_PASS)
+        self.assertEqual(merged.preview_status, cp.STATUS_PASS)
 
     def test_reserved_session_keys_cannot_be_overridden_by_extra_state(self) -> None:
         pattern = _load_pattern("all_green")

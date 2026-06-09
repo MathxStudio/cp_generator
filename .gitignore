@@ -16,6 +16,10 @@ examples/sessions/
 
 # Personal session state
 fold_session*.cpfold*.json
+/cp-v*-*.cpfold.json
+/cp-v*-*.pdf
+/examples/cp-v*-*.cpfold.json
+/examples/cp-v*-*.pdf
 
 # AI / editor config
 .claude/

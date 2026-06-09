@@ -22,6 +22,11 @@ STATUS_WARNING = "warning"
 STATUS_UNKNOWN = "unknown"
 STATUS_NOT_RUN = "not_run"
 
+# The optimizer and saved-session round trips routinely land Kawasaki sums within
+# a few micro-radians of pi. Keep the certified local check slightly looser than
+# the solver noise floor so valid sessions do not flap between pass and fail.
+DEFAULT_LOCAL_FLAT_TOLERANCE = 5e-6
+
 
 @dataclass(frozen=True)
 class VertexLocalDiagnostic:
@@ -654,7 +659,7 @@ class CreasePattern():
             return None
         return sum(angles[::2]), sum(angles[1::2])
 
-    def kawasaki_error(self, v, tolerance=1e-6):
+    def kawasaki_error(self, v, tolerance=DEFAULT_LOCAL_FLAT_TOLERANCE):
         if self.on_edge(v):
             return 0.0
         sums = self.kawasaki_sums(v)
@@ -681,7 +686,7 @@ class CreasePattern():
                     crossings.append((index_map[first], index_map[second]))
         return tuple(crossings)
 
-    def analyze_local(self, tolerance=1e-6):
+    def analyze_local(self, tolerance=DEFAULT_LOCAL_FLAT_TOLERANCE):
         diagnostics = []
         vertex_index = self.vertex_index_map()
         for vertex in self.vertices:
@@ -754,7 +759,7 @@ class CreasePattern():
             underdetermined=unassigned_fold_count > 0,
         )
 
-    def analyze_pattern(self, tolerance=1e-6):
+    def analyze_pattern(self, tolerance=DEFAULT_LOCAL_FLAT_TOLERANCE):
         vertex_diagnostics = self.analyze_local(tolerance=tolerance)
         assignment = self.analyze_assignments()
         interior_vertices = [item for item in vertex_diagnostics if not item.on_edge]
@@ -836,13 +841,13 @@ class CreasePattern():
             return False
         return balance in (-2, 2)
 
-    def kawasaki(self, v, tolerance=1e-6):
+    def kawasaki(self, v, tolerance=DEFAULT_LOCAL_FLAT_TOLERANCE):
         # check Kawasaki's theorem at a single interior vertex
         if self.on_edge(v):
             return True
         return self.kawasaki_error(v, tolerance=tolerance) <= tolerance
 
-    def locally_flat_foldable(self, tolerance=1e-6):
+    def locally_flat_foldable(self, tolerance=DEFAULT_LOCAL_FLAT_TOLERANCE):
         # local flat-foldability needs even degree and Kawasaki at every interior vertex
         for v in self.none_edge_vertices():
             if v.d % 2 == 1:
